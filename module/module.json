@@ -1,0 +1,39 @@
+{
+  "id": "server",
+  "name": "Piphin Server",
+  "version": "0.0.0",
+  "description": "Crie e controle servidores de jogos, sites, bots e bancos de dados em máquinas Ubuntu Server da sua rede, com o Piphin Agent.",
+  "main": "backend.js",
+  "ui": "web/index.html",
+  "icon": "icons/server.png",
+  "accent": "#6366f1",
+  "minHub": "1.4.0",
+  "tools": [
+    {
+      "name": "servers_overview",
+      "title": "Ver as máquinas e os servidores",
+      "readOnly": true,
+      "description": "Lista as máquinas com o Piphin Agent (online, uso de CPU e memória) e os servidores de cada uma: nome, tipo, estado (running, offline, installing...) e endereço para conectar.",
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "server_logs",
+      "title": "Ler o console de um servidor",
+      "readOnly": true,
+      "description": "Mostra as últimas linhas do console de um servidor (para entender erros e quedas).",
+      "input": { "type": "object", "properties": { "server": { "type": "string", "description": "Nome do servidor" }, "lines": { "type": "number", "description": "Quantas linhas (padrão 60)" } }, "required": ["server"] }
+    },
+    {
+      "name": "server_power",
+      "title": "Ligar, desligar ou reiniciar um servidor",
+      "description": "Liga, desliga ou reinicia um servidor. A pessoa confirma antes numa janela.",
+      "input": { "type": "object", "properties": { "server": { "type": "string", "description": "Nome do servidor" }, "action": { "type": "string", "enum": ["start", "stop", "restart"] } }, "required": ["server", "action"] }
+    },
+    {
+      "name": "server_command",
+      "title": "Mandar um comando no console",
+      "description": "Manda um comando para o console de um servidor (ex.: 'say Reiniciando em 5 minutos' no Minecraft) e devolve a resposta. A pessoa confirma antes.",
+      "input": { "type": "object", "properties": { "server": { "type": "string", "description": "Nome do servidor" }, "command": { "type": "string" } }, "required": ["server", "command"] }
+    }
+  ]
+}

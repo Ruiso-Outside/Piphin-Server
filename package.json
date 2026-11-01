@@ -1,0 +1,15 @@
+{
+  "name": "piphin-server",
+  "productName": "Piphin Server",
+  "version": "1.0.0",
+  "description": "Piphin Server: módulo do Piphin Hub e Piphin Agent (Ubuntu Server) para hospedar jogos, sites, bots e bancos de dados com Docker",
+  "author": "Piphin Studio",
+  "private": true,
+  "scripts": {
+    "icons": "node scripts/make-icons.js",
+    "icon": "node scripts/run-electron.js scripts/make-icon.js",
+    "module": "node scripts/make-module.js",
+    "agent": "node scripts/make-agent.js",
+    "test": "node test/agent-test.js"
+  }
+}
