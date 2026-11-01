@@ -19,7 +19,7 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log("  ok  ", msg); } el
 // certificado e configuração de teste
 execFileSync("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2", "-subj", "/CN=teste", "-keyout", path.join(TMP, "key.pem"), "-out", path.join(TMP, "cert.pem")], { stdio: "ignore" });
 fs.writeFileSync(path.join(TMP, "config.json"), JSON.stringify({ name: "maquina-teste", port: PORT, discoveryPort: 18444, dataDir: path.join(TMP, "data"), key: path.join(TMP, "key.pem"), cert: path.join(TMP, "cert.pem") }));
-const env = { ...process.env, PIPHIN_TRACE: process.env.DEBUG ? "1" : "", PIPHIN_CONFIG: path.join(TMP, "config.json"), PIPHIN_DOCKER: `http://127.0.0.1:${DPORT}` };
+const env = { ...process.env, ...require("./fake-system").setup(TMP), PIPHIN_TRACE: process.env.DEBUG ? "1" : "", PIPHIN_CONFIG: path.join(TMP, "config.json"), PIPHIN_DOCKER: `http://127.0.0.1:${DPORT}` };
 const fingerprint = new crypto.X509Certificate(fs.readFileSync(path.join(TMP, "cert.pem"))).fingerprint256;
 
 let token = null;
@@ -171,6 +171,134 @@ const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now
     ok((await api("DELETE", `/api/servers/${eid}`)).status === 200 && (await api("DELETE", "/api/eggs/egg-games-paper-teste")).status === 200, "apaga o servidor e depois o egg");
     ok(!(await api("GET", "/api/templates")).body.some((t) => t.egg), "o egg sai da lista");
     await api("POST", "/api/eggs", { egg, slug: "games-fica" });
+
+    console.log("monitoramento");
+    await sleep(5500);
+    r = await api("GET", "/api/system/monitor");
+    ok(r.status === 200 && r.body.cpu.cores.length === 4 && r.body.cpu.cores[3].mhz === 3700, "uso e frequência por núcleo");
+    ok(r.body.cpu.cores.every((c) => c.pct >= 0 && c.pct <= 100) && r.body.cpu.cores[3].pct > r.body.cpu.cores[0].pct, "cada núcleo com o seu uso");
+    ok(r.body.cpuTemp === 61 && r.body.temps.length === 3 && r.body.temps[0].crit === 100, "temperaturas: a do processador é o sensor do pacote");
+    ok(r.body.fans[0].rpm === 1180, "ventoinhas");
+    ok(r.body.memory.total === 32768000 * 1024 && r.body.memory.cached > 0, "memória detalhada");
+    ok(r.body.net.length === 1 && r.body.net[0].name === "eno1", "rede por placa, sem as virtuais");
+    ok(r.body.io.length === 1 && r.body.io[0].name === "sda" && r.body.mounts.length === 1 && r.body.mounts[0].device === "/dev/sda1", "discos reais, sem loop e tmpfs");
+    ok(r.body.alerts.some((a) => a.code === "temp" && /nvme/.test(a.sensor)) && r.body.alerts.some((a) => a.code === "reboot") && r.body.alerts.some((a) => a.code === "services" && a.count === 1), "alertas: sensor quente, reinício pedido, serviço com defeito");
+    ok((await api("GET", "/api/system/history")).body.length >= 2, "histórico guardado no agente");
+    ok((await api("GET", "/api/system/monitor", null, { headers: { Authorization: "Bearer errado" } })).status === 401, "sem token certo: nada de dados da máquina");
+    r = await api("GET", "/api/system/processes");
+    ok(r.body.some((p) => p.pid === 1234 && p.name === "java server" && p.rss === 250000 * 4096 && p.cmd === "java -jar server.jar"), "processos com nome, memória e comando");
+    ok((await api("POST", "/api/system/processes/1/kill", { signal: "SIGKILL" })).status === 400, "não para o processo 1");
+    ok((await api("POST", "/api/system/processes/2/kill", { signal: "rm -rf" })).status === 400, "sinal inválido recusado");
+    r = await api("GET", "/api/system/smart");
+    ok(r.body.available && r.body.disks[0].healthy === true && r.body.disks[0].temp === 41 && r.body.disks[0].wear === 3, "saúde dos discos");
+
+    console.log("atualizações e tarefas");
+    const jobDone = async () => until(async () => { const j = (await api("GET", "/api/system/job")).body; return j && j.state !== "running"; });
+    r = await api("GET", "/api/system/updates");
+    ok(r.body.packages.length === 2 && r.body.packages[1].security && r.body.packages[0].from === "8.5.0-2ubuntu10.5", "lista os pacotes e marca os de segurança");
+    ok((await api("POST", "/api/system/updates/check")).body.state === "running" && await jobDone(), "procurar atualizações roda em segundo plano");
+    r = await api("POST", "/api/system/updates/install", { full: false });
+    ok(r.status === 200 && (await jobDone()), "instalar atualizações");
+    r = await api("GET", "/api/system/job");
+    ok(r.body.state === "done" && r.body.lines.some((l) => /upgrade/.test(l)), "a tarefa guarda o texto");
+    const calls = () => JSON.parse(fs.readFileSync(env.PIPHIN_FAKE_STATE, "utf8")).calls;
+    ok(calls().some((c) => /^apt-get upgrade -y .*force-confold/.test(c)), "apt sem perguntas e mantendo as configurações");
+
+    console.log("serviços, rede e firewall");
+    r = await api("GET", "/api/system/services");
+    ok(r.body.length === 5 && r.body.find((s) => s.name === "nginx.service").enabled === "disabled" && r.body.find((s) => s.name === "piphin-agent.service").protected, "serviços com estado e sem os inexistentes");
+    ok((await api("POST", "/api/system/services/nginx.service/start")).status === 200, "liga um serviço");
+    ok((await api("POST", "/api/system/services/piphin-agent.service/stop")).status === 400, "não deixa parar o próprio agente");
+    ok((await api("POST", "/api/system/services/x%3Brm.service/stop")).status === 400, "nome de serviço esquisito é recusado");
+    r = await api("GET", "/api/system/logs?unit=ssh.service&lines=50&priority=3&grep=erro");
+    ok(r.body[0].includes("-u ssh.service") && r.body[0].includes("-p 3") && r.body[0].includes("--grep erro"), "logs com filtros");
+    r = await api("GET", "/api/system/network");
+    ok(r.body.interfaces.some((i) => i.name === "eno1" && i.speed === 1000 && i.mac) && r.body.listening.some((x) => x.port === 22 && x.program === "sshd"), "placas de rede e portas abertas");
+    ok(r.body.firewall.active && r.body.firewall.rules.length === 3 && r.body.firewall.rules[0].to === "8443/tcp", "lê o firewall");
+    r = await api("POST", "/api/system/firewall", { action: "add", port: 8080, proto: "tcp", rule: "allow" });
+    ok(r.body.rules.some((x) => x.to === "8080/tcp"), "abre uma porta");
+    ok((await api("POST", "/api/system/firewall", { action: "add", port: PORT, proto: "tcp", rule: "deny" })).status === 400, "não deixa bloquear a porta do agente");
+    ok((await api("POST", "/api/system/firewall", { action: "add", port: "22;rm", proto: "tcp", rule: "allow" })).status === 400, "porta inválida recusada");
+    await api("POST", "/api/system/firewall", { action: "disable" });
+    r = await api("POST", "/api/system/firewall", { action: "enable" });
+    ok(r.body.active && r.body.rules.some((x) => x.to === PORT + "/tcp") && r.body.rules.some((x) => x.to === "22/tcp"), "ligar o firewall libera antes o agente e o SSH");
+    const agentRule = r.body.rules.find((x) => x.to === PORT + "/tcp");
+    ok((await api("POST", "/api/system/firewall", { action: "delete", n: agentRule.n })).status === 400, "não tira a regra do agente");
+    ok((await api("POST", "/api/system/firewall", { action: "delete", n: r.body.rules.find((x) => x.to === "8080/tcp").n })).status === 200, "tira outra regra");
+
+    console.log("sistema e Docker");
+    r = await api("GET", "/api/system/overview");
+    ok(r.body.timezone === "Etc/UTC" && r.body.rebootRequired && r.body.rebootPackages[0] === "linux-image-generic", "fuso e reinício pedido");
+    ok((await api("POST", "/api/system/timezone", { timezone: "America/Sao_Paulo" })).status === 200 && (await api("GET", "/api/system/overview")).body.timezone === "America/Sao_Paulo", "muda o fuso");
+    ok((await api("POST", "/api/system/timezone", { timezone: "a; reboot" })).status === 400, "fuso esquisito recusado");
+    ok((await api("POST", "/api/system/hostname", { hostname: "bad name" })).status === 400, "nome inválido recusado");
+    r = await api("POST", "/api/system/agent-update");
+    ok(r.status === 200 && JSON.parse(fs.readFileSync(env.PIPHIN_FAKE_STATE, "utf8")).agentUpdate.includes("PIPHIN_UPDATE=1"), "atualiza o agente fora do serviço");
+    r = await api("POST", "/api/system/pair-code");
+    ok(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(r.body.code), "gera código para parear outro Hub");
+    r = await api("GET", "/api/system/docker");
+    ok(r.status === 200 && r.body.images[0].tags[0] === "eclipse-temurin:21-jre" && r.body.containers.find((c) => c.name === "piphin-x").piphin && !r.body.containers.find((c) => c.name === "outro").piphin, "imagens e contêineres do Docker");
+    r = await api("POST", "/api/system/docker/prune", { what: "containers" });
+    ok(/label!/.test(r.body.filters) && /piphin\.server/.test(r.body.filters), "a limpeza poupa os contêineres dos servidores");
+
+    console.log("terminal");
+    const tls = require("tls");
+    const attach = (id, tok = token) => new Promise((resolve, reject) => {
+      const s = tls.connect({ host: "127.0.0.1", port: PORT, rejectUnauthorized: false }, () => s.write(`GET /api/terminals/${id}/attach HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: piphin-terminal\r\nAuthorization: Bearer ${tok}\r\n\r\n`));
+      s.text = ""; s.on("data", (d) => { s.text += d.toString("utf8"); }); s.on("error", () => {});
+      setTimeout(() => resolve(s), 400);
+    });
+    r = await api("POST", "/api/terminals", { cols: 100, rows: 40 });
+    const tid = r.body.id;
+    ok(r.status === 200 && tid && r.body.cols === 100, "abre um terminal");
+    const bad = await attach(tid, "errado");
+    ok(bad.text.startsWith("HTTP/1.1 401"), "terminal sem token certo é recusado");
+    bad.destroy();
+    let sock = await attach(tid);
+    ok(sock.text.startsWith("HTTP/1.1 101") && /root@ubuntu-teste/.test(sock.text), "conecta e recebe o prompt");
+    sock.write("acentos\r");
+    ok(await until(() => sock.text.includes("ação ✓"), 3000), "manda comando e recebe a resposta com acentos");
+    await api("POST", `/api/terminals/${tid}/resize`, { cols: 80, rows: 20 });
+    sock.write("tamanho\r");
+    ok(await until(() => sock.text.includes("80x20"), 3000), "muda o tamanho");
+    sock.destroy(); await sleep(300);
+    ok((await api("GET", "/api/terminals")).body.find((t) => t.id === tid).attached === false, "desconectar não mata a sessão");
+    sock = await attach(tid);
+    ok(sock.text.includes("80x20"), "ao voltar, mostra o que já tinha na tela");
+    sock.write("exit\r");
+    ok(await until(async () => !(await api("GET", "/api/terminals")).body.some((t) => t.id === tid), 3000), "exit fecha a sessão");
+    ok((await api("POST", "/api/terminals/ffff/resize", { cols: 80, rows: 20 })).body.ok === false, "sessão que não existe");
+
+    console.log("identidade da máquina (impressão digital)");
+    const { PinnedAgent } = require("../module/pinned");
+    const pinned = (port, fp) => new Promise((resolve) => {
+      const q = https.request({ host: "127.0.0.1", port, path: "/api/hello", agent: new PinnedAgent(fp), headers: { Authorization: "Bearer SEGREDO" } }, (res) => { res.resume(); res.on("end", () => resolve({ ok: res.statusCode, cert: res.socket && res.socket.getPeerCertificate ? 1 : 0 })); });
+      q.on("error", (e) => resolve({ err: e.message })); q.end();
+    });
+    ok((await pinned(PORT, fingerprint)).ok === 200, "conecta com a impressão digital certa");
+    ok((await pinned(PORT, "*")).ok === 200, "primeiro contato do pareamento");
+    let spied = null;
+    const impostor = https.createServer({ key: fs.readFileSync(path.join(TMP, "key.pem")), cert: fs.readFileSync(path.join(TMP, "cert.pem")) }, (req, res) => { spied = req.headers.authorization || "sem token"; res.end("{}"); });
+    await new Promise((res) => impostor.listen(18998, res));
+    const fake = "AA:" + fingerprint.slice(3).replace(/./g, (c) => c);
+    r = await pinned(18998, fake === fingerprint ? "00:00" : fake);
+    ok(/identidade da máquina mudou/.test(r.err || ""), "certificado diferente é recusado");
+    ok(spied === null, "o token nunca chega a uma máquina impostora");
+    impostor.close();
+
+    console.log("reiniciar a máquina");
+    r = await api("GET", `/api/servers`);
+    const mine = r.body.find((s) => s.id === id);
+    await api("POST", `/api/servers/${id}/power`, { action: "start" });
+    await until(async () => (await api("GET", `/api/servers/${id}`)).body.state === "running", 15000);
+    ok((await api("POST", "/api/system/power", { action: "explodir" })).status === 400, "ação de energia inválida");
+    await jobDone();
+    r = await api("POST", "/api/system/power", { action: "reboot" });
+    ok(r.status === 200 && r.body.kind === "power", "reiniciar é uma tarefa com texto");
+    await jobDone();
+    ok(await until(async () => (await api("GET", `/api/servers/${id}`)).body.state === "offline", 15000), "para os servidores antes de reiniciar");
+    ok(calls().includes("systemctl reboot"), "manda o sistema reiniciar");
+    void mine;
 
     console.log("apagar e reiniciar o agente");
     ok((await api("DELETE", `/api/servers/${r2.body.id}`)).status === 200, "apaga um servidor");

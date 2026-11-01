@@ -1,1 +1,1 @@
-{"src":["module","web","agent"],"skip":["test","dist"],"extra":["reiniciar","ligar","desligar","comando","automática","agendado","livres"]}
+{"src":["module","web","agent"],"skip":["test","dist"],"extra":["processos","rodando","parados","ocupado","imagens","erros","do processador","desconectado","reiniciar","ligar","desligar","comando","automática","agendado","livres"]}

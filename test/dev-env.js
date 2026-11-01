@@ -11,7 +11,7 @@ fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(DIR, { recursive: true });
 execFileSync("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "30", "-subj", "/CN=piphin-dev", "-keyout", path.join(DIR, "key.pem"), "-out", path.join(DIR, "cert.pem")], { stdio: "ignore" });
 fs.writeFileSync(path.join(DIR, "config.json"), JSON.stringify({ name: "ubuntu-teste", port: 18443, discoveryPort: 8444, dataDir: path.join(DIR, "data"), key: path.join(DIR, "key.pem"), cert: path.join(DIR, "cert.pem") }));
-const env = { ...process.env, PIPHIN_CONFIG: path.join(DIR, "config.json"), PIPHIN_DOCKER: "http://127.0.0.1:2375" };
+const env = { ...process.env, PIPHIN_CONFIG: path.join(DIR, "config.json"), PIPHIN_DOCKER: "http://127.0.0.1:2375", ...require("./fake-system").setup(DIR) };
 const dock = spawn(process.execPath, [path.join(__dirname, "fake-docker.js"), "2375"], { stdio: "inherit" });
 setTimeout(() => {
   const out = execFileSync(process.execPath, [path.join(ROOT, "agent/src/main.js"), "pair"], { env }).toString();

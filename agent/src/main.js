@@ -20,6 +20,8 @@ const schedules = require("./schedules");
 const files = require("./files");
 const host = require("./host");
 const Auth = require("./auth");
+const system = require("./system");
+const Terminals = require("./terminal");
 
 const VERSION = require("../package.json").version;
 const CONFIG = process.env.PIPHIN_CONFIG || "/etc/piphin-agent/config.json";
@@ -73,6 +75,10 @@ const broadcast = (type, data) => { const msg = `event: ${type}\ndata: ${JSON.st
 servers.on("line", (l) => broadcast("line", l));
 servers.on("state", (s) => broadcast("state", s));
 servers.on("changed", (c) => broadcast("changed", c));
+const monitor = new system.Monitor(cfg.dataDir, docker);
+const jobs = new system.Jobs((j) => broadcast("job", j));
+const terminals = new Terminals(log);
+monitor.start();
 
 function send(res, status, body) {
   const data = Buffer.from(JSON.stringify(body));
@@ -139,6 +145,75 @@ route("GET", "/api/events", true, (req, res) => {
   return undefined; // resposta aberta
 });
 
+// ---------------------------------------------------------------- a máquina inteira
+const sysRoute = (m, p, fn) => route(m, "/api/system" + p, true, fn);
+sysRoute("GET", "/overview", () => system.overview());
+sysRoute("GET", "/monitor", () => ({ ...monitor.latest, alerts: monitor.alerts() }));
+sysRoute("GET", "/history", (req, res, p, q) => monitor.history(q.get("range")));
+sysRoute("GET", "/processes", (req, res, p, q) => system.processes(Number(q.get("limit")) || 40));
+sysRoute("POST", "/processes/:pid/kill", async (req, res, p) => { const b = await readJson(req); log("processo parado:", p.pid, b.signal); return { ok: system.killProcess(p.pid, b.signal) }; });
+sysRoute("GET", "/smart", () => system.smart());
+// atualizações do sistema
+sysRoute("GET", "/updates", async () => ({ packages: await system.upgradable(), job: jobs.view() }));
+sysRoute("POST", "/updates/check", () => jobs.run("apt-check", () => jobs.exec("apt-get", ["update"], 600000)));
+sysRoute("POST", "/updates/install", async (req) => {
+  const b = await readJson(req);
+  log("atualizando o sistema", b.full ? "(completo)" : "");
+  return jobs.run("apt-upgrade", () => jobs.exec("apt-get", [b.full ? "dist-upgrade" : "upgrade", ...system.APT_UPGRADE]));
+});
+sysRoute("GET", "/job", () => jobs.view());
+// atualizar o agente
+sysRoute("POST", "/agent-update", async () => { log("atualizando o agente"); return { ok: await system.updateAgent(cfg.dataDir) }; });
+sysRoute("GET", "/agent-update", () => ({ log: system.agentUpdateLog(cfg.dataDir), version: VERSION }));
+// reiniciar e desligar: antes para os servidores do jeito certo; os que estavam ligados voltam quando a máquina voltar
+sysRoute("POST", "/power", async (req) => {
+  const { action } = await readJson(req);
+  if (!["reboot", "poweroff"].includes(action)) throw Object.assign(new Error("Ação inválida"), { status: 400 });
+  log("energia:", action);
+  return jobs.run("power", async () => {
+    for (const s of servers.map.values()) {
+      if (servers.r(s.id).state === "offline") continue;
+      jobs.line(`${s.name}...`);
+      await servers.stopContainer(s, false).catch((e) => jobs.line(e.message));
+    }
+    await system.power(action);
+    return 0;
+  });
+});
+// serviços, logs, rede, firewall
+sysRoute("GET", "/services", () => system.services());
+sysRoute("POST", "/services/:name/:action", async (req, res, p) => { log("serviço:", p.name, p.action); return { ok: await system.serviceAction(p.name, p.action) }; });
+sysRoute("GET", "/logs", (req, res, p, q) => system.logs({ unit: q.get("unit"), lines: q.get("lines"), priority: q.get("priority"), kernel: q.get("kernel") === "1", grep: q.get("grep") }));
+sysRoute("GET", "/network", async () => ({ interfaces: system.interfaces(), listening: await system.listening().catch(() => []), firewall: await system.firewall().catch(() => ({ installed: false, active: false, rules: [] })) }));
+sysRoute("POST", "/firewall", async (req) => { const b = await readJson(req); log("firewall:", b.action, b.port || b.n || ""); return system.firewallAction(b, cfg.port); });
+// nome, fuso e outros Hubs
+sysRoute("GET", "/timezones", () => system.timezones());
+sysRoute("POST", "/timezone", async (req) => ({ ok: await system.setTimezone((await readJson(req)).timezone) }));
+sysRoute("POST", "/hostname", async (req) => ({ ok: await system.setHostname((await readJson(req)).hostname) }));
+sysRoute("POST", "/pair-code", () => ({ code: auth.newCode() }));
+// Docker
+sysRoute("GET", "/docker", async () => {
+  const [info, df] = await Promise.all([docker.info(), docker.df()]);
+  const size = (l, k = "Size") => (l || []).reduce((a, x) => a + (x[k] || 0), 0);
+  return { version: info.ServerVersion || "", storage: info.Driver || "", root: info.DockerRootDir || "", running: info.ContainersRunning || 0, stopped: info.ContainersStopped || 0,
+    images: (df.Images || []).map((i) => ({ id: i.Id, tags: i.RepoTags || [], size: i.Size, containers: i.Containers, created: i.Created })).sort((a, b) => b.size - a.size),
+    containers: (df.Containers || []).map((c) => ({ id: c.Id, name: (c.Names || [""])[0].replace(/^\//, ""), image: c.Image, state: c.State, status: c.Status, piphin: !!(c.Labels && (c.Labels["piphin.server"] || c.Labels["piphin.install"])) })),
+    disk: { images: size(df.Images), layers: df.LayersSize || 0, containers: size(df.Containers, "SizeRw"), volumes: (df.Volumes || []).reduce((a, v) => a + ((v.UsageData && v.UsageData.Size) || 0), 0), cache: size(df.BuildCache) } };
+});
+sysRoute("POST", "/docker/prune", async (req) => {
+  const { what } = await readJson(req);
+  if (what !== "images" && what !== "containers") throw Object.assign(new Error("Ação inválida"), { status: 400 });
+  log("docker: limpeza", what);
+  // contêineres e imagens dos servidores do Piphin nunca entram: os parados ficam com a etiqueta deles e as imagens em uso são poupadas
+  return docker.prune(what);
+});
+// terminal da máquina
+const terminalOff = () => { if (cfg.terminal === false) throw Object.assign(new Error("O terminal está desligado na configuração desta máquina"), { status: 403 }); };
+route("GET", "/api/terminals", true, () => { terminalOff(); return terminals.list(); });
+route("POST", "/api/terminals", true, async (req) => { terminalOff(); const b = await readJson(req); return terminals.open({ cols: b.cols, rows: b.rows, who: req.socket.remoteAddress }); });
+route("POST", "/api/terminals/:tid/resize", true, async (req, res, p) => { const b = await readJson(req); return { ok: terminals.resize(p.tid, b.cols, b.rows) }; });
+route("DELETE", "/api/terminals/:tid", true, (req, res, p) => ({ ok: terminals.close(p.tid) }));
+
 route("GET", "/api/servers", true, () => servers.list());
 route("POST", "/api/servers", true, async (req) => servers.create(await readJson(req)));
 route("GET", "/api/servers/:id", true, (req, res, p) => servers.view(servers.get(p.id)));
@@ -191,6 +266,16 @@ const server = https.createServer({ key: fs.readFileSync(cfg.key), cert: certPem
   }
   send(res, 404, { error: "Não encontrado" });
 });
+// o terminal é um canal direto de bytes: GET /api/terminals/<id>/attach com "Upgrade: piphin-terminal"
+server.on("upgrade", (req, socket) => {
+  const m = /^\/api\/terminals\/([a-f0-9]+)\/attach$/.exec(new URL(req.url, "https://agent").pathname);
+  const refuse = (code) => { socket.end(`HTTP/1.1 ${code} Refused\r\nConnection: close\r\n\r\n`); };
+  if (!m || req.headers.upgrade !== "piphin-terminal") return refuse(404);
+  if (!auth.check(req.headers.authorization, req.socket.remoteAddress) || cfg.terminal === false) return refuse(401);
+  socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: piphin-terminal\r\nConnection: Upgrade\r\n\r\n");
+  socket.setNoDelay(true);
+  if (!terminals.attach(m[1], socket)) socket.end();
+});
 server.listen(cfg.port, cfg.bind || "0.0.0.0", () => log(`Piphin Agent ${VERSION} ouvindo em https://0.0.0.0:${cfg.port} · impressão digital ${fingerprint.slice(0, 23)}...`));
 
 // ---------------------------------------------------------------- descoberta na rede (o Hub manda "PIPHIN-DISCOVER" por broadcast)
@@ -205,5 +290,5 @@ udp.bind(cfg.discoveryPort);
 
 servers.boot().catch((e) => log("boot", e.message));
 schedules.start(servers, backups, log);
-const bye = () => { log("parando"); server.close(); udp.close(); process.exit(0); };
+const bye = () => { log("parando"); terminals.closeAll(); server.close(); udp.close(); process.exit(0); };
 process.on("SIGTERM", bye); process.on("SIGINT", bye);

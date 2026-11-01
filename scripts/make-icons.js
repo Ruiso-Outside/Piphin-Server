@@ -10,6 +10,7 @@ if (!LUCIDE) throw new Error("lucide-static não encontrado (rode npm install no
 const OUT = path.join(__dirname, "..", "web", "icons.css");
 
 const NAMES = `
+layout-dashboard scroll-text thermometer fan shield shield-check shield-off clock circle-arrow-up package list settings box globe key skull
 egg search
 server server-cog hard-drive cpu memory-stick activity gauge network wifi plus x check play square rotate-ccw power zap terminal folder folder-open folder-plus file file-text file-plus upload download trash-2 pencil copy archive history clock calendar-clock settings sliders-horizontal shield-check key-round link search refresh-cw chevron-right chevron-down chevron-left arrow-left arrow-up external-link circle-alert triangle-alert info circle-check radar router monitor pickaxe trees axe bot code globe database box gamepad-2 users loader-circle save eye eye-off sparkles house list layout-grid
 `.split(/\s+/).filter(Boolean);

@@ -46,6 +46,7 @@ c_step "Pacotes básicos"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl ca-certificates tar xz-utils openssl >/dev/null
+apt-get install -y -qq smartmontools >/dev/null 2>&1 || true # saúde dos discos no monitoramento (opcional)
 
 c_step "Docker"
 if ! command -v docker >/dev/null; then
@@ -138,6 +139,8 @@ fi
 sleep 2
 systemctl is-active --quiet piphin-agent || { journalctl -u piphin-agent -n 30 --no-pager; die "o serviço não iniciou"; }
 c_ok "Piphin Agent rodando."
+# atualizando pelo Hub: já está pareado, não precisa de código novo
+if [ -n "${PIPHIN_UPDATE:-}" ]; then exit 0; fi
 piphin-agent pair
 echo "No Piphin Hub: abra o Piphin Server > Adicionar máquina e digite o código acima."
 echo "Para um código novo depois: sudo piphin-agent pair"

@@ -79,6 +79,8 @@ const server = http.createServer((req, res) => {
     setTimeout(() => { images.add(img); res.end(JSON.stringify({ status: "Downloaded newer image for " + img }) + "\n"); }, 300);
     return;
   }
+  if (p === "/system/df") return json(res, 200, { LayersSize: 5000, Images: [{ Id: "sha256:a", RepoTags: ["eclipse-temurin:21-jre"], Size: 4000, Containers: 1, Created: 1 }], Containers: [{ Id: "c1", Names: ["/piphin-x"], Image: "i", State: "exited", Status: "Exited", SizeRw: 10, Labels: { "piphin.server": "x" } }, { Id: "c2", Names: ["/outro"], Image: "i", State: "running", Status: "Up", Labels: {} }], Volumes: [], BuildCache: [] });
+  if (p === "/images/prune" || p === "/containers/prune") return json(res, 200, { SpaceReclaimed: 123, filters: u.searchParams.get("filters") });
   if (p === "/containers/create" && req.method === "POST") {
     let body = ""; req.on("data", (d) => (body += d)); req.on("end", () => {
       const b = JSON.parse(body), name = u.searchParams.get("name");

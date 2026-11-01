@@ -16,7 +16,14 @@ São duas partes:
 - **Backups**: `.tar.gz` guardado na própria máquina, com nota; restaurar e baixar para o PC. Os automáticos guardam os 7 mais novos
 - **Agendamentos**: reiniciar, ligar, desligar, backup ou comando no console, com atalhos (todo dia, toda semana, a cada N horas) ou cron
 - **Configurações**: opções do modelo, versão, imagem do Docker, comando de início, portas, limite de memória, processador e disco
-- **IA**: com o Piphin LLM, a IA vê as máquinas e servidores, lê o console, liga e desliga e manda comandos (sempre pedindo confirmação para ações). Ferramentas no `module/module.json`
+- **Monitoramento**: uso e frequência de cada núcleo, temperaturas, ventoinhas, placa de vídeo NVIDIA, memória, discos (espaço, velocidade e saúde), rede por placa, processos e histórico de 1 e 24 horas, guardado no agente, com alertas de disco cheio, memória, temperatura, serviço com defeito e reinício pendente
+- **Sistema**: atualizar o agente com um clique, ver e instalar as atualizações do Ubuntu, reiniciar e desligar parando os servidores do jeito certo, ligar pela rede (Wake-on-LAN), nome, fuso horário e código para parear outro Hub
+- **Serviços**: ver, iniciar, parar, reiniciar e escolher quais ligam sozinhos (systemd), com os logs de cada um
+- **Rede**: firewall (ufw) com regras, placas de rede e portas abertas
+- **Docker**: espaço usado, imagens, contêineres e limpeza
+- **Logs**: os logs do sistema, com filtros
+- **Terminal**: terminal root da máquina dentro do Hub, com várias sessões, cores e programas como `top` e `nano`; a sessão continua por 10 minutos se o Hub desconectar
+- **IA**: com o Piphin LLM, a IA vê as máquinas e servidores, a saúde de cada máquina, lê o console, liga e desliga e manda comandos (sempre pedindo confirmação para ações). Ferramentas no `module/module.json`
 
 ## Modelos
 
@@ -76,7 +83,10 @@ sudo piphin-agent revoke ID # tira o acesso de um Hub
 
 ## Segurança
 
-- Tudo passa por HTTPS. O Hub guarda a impressão digital do certificado no pareamento e recusa qualquer outro depois disso
+- Tudo passa por HTTPS. O Hub guarda a impressão digital do certificado no pareamento e, antes de mandar qualquer coisa, confere se é a mesma. Se não for, a conexão é cortada e o token não sai do PC
+- Um Hub pareado é administrador da máquina (root): tem terminal, atualiza o sistema e desliga. Pareie só os seus. Para tirar o terminal de uma máquina, coloque `"terminal": false` em `/etc/piphin-agent/config.json` e reinicie o serviço
+- As ações na máquina (terminal aberto, serviços, firewall, energia) ficam no log do agente: `journalctl -u piphin-agent`
+- A IA do Piphin LLM não tem acesso ao terminal nem às ações da máquina, só à leitura da saúde
 - O pareamento usa um código de 8 letras, de uso único, que só aparece no terminal da máquina. 5 tentativas erradas bloqueiam o IP por 15 minutos
 - O agente guarda só o hash dos tokens dos Hubs
 - Os arquivos de cada servidor ficam presos na pasta dele (links que saem dela são recusados)
@@ -84,12 +94,12 @@ sudo piphin-agent revoke ID # tira o acesso de um Hub
 
 ## Estrutura
 
-- `agent/src/`: `main.js` (linha de comando, API HTTPS, eventos ao vivo, descoberta), `docker.js` (API do Docker pelo socket), `servers.js` (ciclo de vida), `files.js`, `backups.js`, `schedules.js`, `host.js`, `auth.js`, `templates.js`, `eggs.js` (eggs do Pterodactyl)
+- `agent/src/`: `main.js` (linha de comando, API HTTPS, eventos ao vivo, descoberta), `system.js` (monitoramento e controle da máquina), `terminal.js` (terminal num pseudo-terminal, pelo comando `script`), `docker.js` (API do Docker pelo socket), `servers.js` (ciclo de vida), `files.js`, `backups.js`, `schedules.js`, `host.js`, `auth.js`, `templates.js`, `eggs.js` (eggs do Pterodactyl)
 - `agent/templates/`: os modelos
 - `agent/install.sh`: o instalador
-- `module/`: `module.json` e `backend.js` (conversa com os agentes)
-- `web/`: a tela
-- `test/`: `fake-docker.js` (Docker falso para testar no Windows), `agent-test.js` (teste completo do agente), `dev-env.js` (agente local para testar a tela)
+- `module/`: `module.json`, `backend.js` (conversa com os agentes) e `pinned.js` (conexão presa à impressão digital)
+- `web/`: a tela (`js/app.js`, `js/machine.js` e `vendor/` com o [xterm.js](https://xtermjs.org), licença MIT)
+- `test/`: `fake-docker.js` (Docker falso para testar no Windows), `agent-test.js` (teste completo do agente), `fake-system.js` e `fake-shell.js` (`/proc`, `/sys`, comandos do sistema e shell de mentira), `dev-env.js` (agente local para testar a tela)
 - `scripts/`: `make-module.js` (gera `dist/piphin-module-server-<versão>.zip`), `make-agent.js` (gera `dist/piphin-agent.tar.gz` e `dist/install.sh`), `make-icons.js`, `make-icon.js`
 
 ```bash

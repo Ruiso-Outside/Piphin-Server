@@ -163,3 +163,52 @@ h3.h .i { color: var(--sv-2); }
 .egg-item .tpl span:not(.badge) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .egg-item .egg-del { position: absolute; top: 6px; right: 6px; }
 #eggList { overflow-x: hidden; }
+
+/* máquina: abas, monitoramento, sistema, terminal */
+.m-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; align-items: start; }
+.alert { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 12px; font-size: 13px; margin-bottom: 8px; border: 1px solid rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .08); }
+.alert .i { color: var(--warn); }
+.alert.bad { border-color: rgba(248, 113, 113, .4); background: rgba(248, 113, 113, .09); }
+.alert.bad .i { color: var(--bad); }
+.cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.core { padding: 8px 10px; border-radius: 10px; background: var(--p-surface-2, rgba(255, 255, 255, .03)); border: 1px solid var(--p-line); font-size: 12px; display: grid; gap: 5px; }
+.core .row { justify-content: space-between; gap: 6px; }
+.core b { font-size: 13px; }
+.chart { display: grid; gap: 4px; }
+.chart .row { justify-content: space-between; font-size: 12px; color: var(--p-text-3); }
+.chart .row b { color: var(--p-text-1, #fff); font-size: 13px; }
+.chart canvas { width: 100%; height: 90px; display: block; border-radius: 8px; background: rgba(255, 255, 255, .02); }
+.m-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.m-table th { text-align: left; font-weight: 600; font-size: 12px; color: var(--p-text-3); padding: 6px 8px; border-bottom: 1px solid var(--p-line); white-space: nowrap; }
+.m-table td { padding: 7px 8px; border-bottom: 1px solid var(--p-line); vertical-align: middle; }
+.m-table tr:last-child td { border-bottom: 0; }
+.m-table .num { text-align: right; white-space: nowrap; }
+.m-table .cut { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-scroll { overflow: auto; max-height: 420px; }
+.sensor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; font-size: 13px; margin-bottom: 9px; }
+.sensor .bar { grid-column: 1 / -1; }
+.jobbox { margin-top: 10px; max-height: 260px; overflow: auto; padding: 10px 12px; border-radius: 10px; background: #0b0b12; font: 12px/1.45 var(--p-font-mono, Consolas, monospace); white-space: pre-wrap; word-break: break-word; }
+.logbox { max-height: 62vh; overflow: auto; padding: 10px 12px; border-radius: 10px; background: #0b0b12; font: 12px/1.5 var(--p-font-mono, Consolas, monospace); white-space: pre-wrap; word-break: break-word; }
+.m-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 12px; }
+.m-tools label { display: grid; gap: 4px; font-size: 12px; color: var(--p-text-3); }
+.m-tools .grow { flex: 1 1 200px; }
+.term-tabs { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.term-tabs button.tt { height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--p-line-2); background: none; color: var(--p-text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; font: 600 12px var(--p-font-ui, inherit); }
+.term-tabs button.tt.on { background: var(--sv-soft); border-color: rgba(99, 102, 241, .5); color: #fff; }
+#termBox { height: calc(100vh - 250px); min-height: 280px; background: #0b0b12; border-radius: 12px; padding: 8px; border: 1px solid var(--p-line); overflow: hidden; }
+.term-host { width: 100%; height: 100%; }
+.term-host .xterm-viewport { background: transparent !important; }
+@media (max-width: 900px) { .m-grid { grid-template-columns: 1fr; } }
+
+.wrap, .wrap > *, #nodeBody, #nodeBody > * { min-width: 0; max-width: 100%; }
+.tabs { flex-wrap: wrap; }
+.tabs button { white-space: nowrap; }
+.head { flex-wrap: wrap; }
+.head .btn { flex: none; }
+.stats { grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
+.m-grid { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+.m-grid > * { min-width: 0; }
+.chart { min-width: 0; }
+.card { min-width: 0; overflow-wrap: anywhere; }
+.m-table td, .m-table th { overflow-wrap: normal; }
+.sensor > * { min-width: 0; overflow-wrap: anywhere; }

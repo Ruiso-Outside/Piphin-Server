@@ -7,6 +7,8 @@ const path = require("path");
 const https = require("https");
 const dgram = require("dgram");
 const crypto = require("crypto");
+const { StringDecoder } = require("string_decoder");
+const { PinnedAgent } = require("./pinned");
 
 const INSTALL_CMD = "curl -fsSL https://github.com/Ruiso-Outside/Piphin-Server/releases/latest/download/install.sh | sudo bash";
 
@@ -23,8 +25,7 @@ exports.activate = (ctx) => {
     return new Promise((resolve, reject) => {
       const data = body == null || raw ? null : Buffer.from(JSON.stringify(body));
       const fp = fingerprint || n.fingerprint;
-      const req = https.request({ host: n.host, port: n.port, method, path: p, timeout, rejectUnauthorized: false,
-        checkServerIdentity: (h, cert) => (fp === "*" || cert.fingerprint256 === fp ? undefined : new Error("A identidade da máquina mudou (certificado diferente). Por segurança, remova e pareie de novo.")),
+      const req = https.request({ host: n.host, port: n.port, method, path: p, timeout, agent: new PinnedAgent(fp),
         headers: { ...(auth && n.token ? { Authorization: "Bearer " + n.token } : {}), ...(data ? { "Content-Type": "application/json", "Content-Length": data.length } : {}), ...(raw ? raw.headers || {} : {}) } }, (res) => {
         if (onResponse) return onResponse(res, resolve, reject);
         const cert = res.socket && res.socket.getPeerCertificate ? res.socket.getPeerCertificate() : null;
@@ -106,8 +107,7 @@ exports.activate = (ctx) => {
     live.set(n.id, st);
     const open = () => {
       if (st.stopped) return;
-      st.req = https.request({ host: n.host, port: n.port, method: "GET", path: "/api/events", rejectUnauthorized: false,
-        checkServerIdentity: (h, cert) => (cert.fingerprint256 === n.fingerprint ? undefined : new Error("certificado diferente")),
+      st.req = https.request({ host: n.host, port: n.port, method: "GET", path: "/api/events", agent: new PinnedAgent(n.fingerprint),
         headers: { Authorization: "Bearer " + n.token, Accept: "text/event-stream" } }, (res) => {
         if (res.statusCode !== 200) { res.resume(); return fail(res.statusCode === 401 ? "pareamento perdido" : `erro ${res.statusCode}`); }
         setOnline(true);
@@ -276,7 +276,82 @@ exports.activate = (ctx) => {
   });
   ctx.handle("egg-delete", ({ node: id, egg }) => api(id, "DELETE", `/api/eggs/${sid(egg)}`));
 
+  // ---------------------------------------------------------------- a máquina inteira (monitoramento, atualizações, serviços, firewall...)
+  ctx.handle("sys", ({ node: id, method = "GET", path: p, body, timeout = 30000 }) => {
+    if (!/^\/api\/system\//.test(String(p))) throw new Error("Caminho inválido");
+    return api(id, method, p, body, { timeout });
+  });
+  // a versão mais nova do agente: o link "latest" do GitHub aponta para a tag, sem gastar o limite da API
+  let latest = { at: 0, version: null };
+  ctx.handle("agent-latest", async () => {
+    if (Date.now() - latest.at < 3600000 && latest.version) return latest.version;
+    const r = await fetch("https://github.com/Ruiso-Outside/Piphin-Server/releases/latest", { redirect: "manual", headers: { "User-Agent": "Piphin-Hub" } });
+    const m = /\/tag\/v([\d.]+)$/.exec(r.headers.get("location") || "");
+    if (!m) throw new Error("Não deu para ver a versão mais nova");
+    latest = { at: Date.now(), version: m[1] };
+    return m[1];
+  });
+  // Wake-on-LAN: a máquina desligada não responde ao agente, então o pacote sai deste PC
+  ctx.handle("node-remember-mac", ({ id, mac }) => { const n = node(id); if (/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(mac || "") && n.mac !== mac) { n.mac = mac; save(); } return true; });
+  ctx.handle("node-mac", (id) => node(id).mac || null);
+  ctx.handle("node-wake", (id) => new Promise((resolve, reject) => {
+    const n = node(id); if (!n.mac) return reject(new Error("O endereço físico desta máquina ainda não é conhecido"));
+    const mac = Buffer.from(n.mac.replace(/:/g, ""), "hex"), packet = Buffer.concat([Buffer.alloc(6, 0xff), ...Array(16).fill(mac)]);
+    const sock = dgram.createSocket("udp4");
+    sock.bind(0, () => {
+      sock.setBroadcast(true);
+      for (const b of broadcasts()) sock.send(packet, 9, b, () => {});
+      setTimeout(() => { try { sock.close(); } catch {} resolve(true); }, 300);
+    });
+  }));
+
+  // ---------------------------------------------------------------- terminal da máquina
+  const terms = new Map(); // sessão -> { node, socket }
+  const termKey = (id, sid) => `${id}/${sid}`;
+  function termAttach(id, sid) {
+    const n = node(id), key = termKey(id, sid);
+    return new Promise((resolve, reject) => {
+      const old = terms.get(key); if (old) { old.replaced = true; old.socket.destroy(); }
+      const req = https.request({ host: n.host, port: n.port, method: "GET", path: `/api/terminals/${sid}/attach`, timeout: 10000, agent: new PinnedAgent(n.fingerprint),
+        headers: { Authorization: "Bearer " + n.token, Connection: "Upgrade", Upgrade: "piphin-terminal" } });
+      req.on("upgrade", (res, socket, head) => {
+        const t = { socket, replaced: false }, dec = new StringDecoder("utf8");
+        terms.set(key, t);
+        socket.setTimeout(0);
+        const send = (b) => { const data = dec.write(b); if (data) ctx.emit("term-data", { node: id, sid, data }); };
+        if (head && head.length) send(head);
+        socket.on("data", send);
+        const end = () => { if (t.replaced || terms.get(key) !== t) return; terms.delete(key); ctx.emit("term-exit", { node: id, sid }); };
+        socket.on("close", end); socket.on("error", end);
+        resolve(true);
+      });
+      req.on("response", (res) => { res.resume(); reject(new Error(`Erro ${res.statusCode}`)); });
+      req.on("timeout", () => req.destroy(new Error("A máquina não respondeu")));
+      req.on("error", reject);
+      req.end();
+    });
+  }
+  ctx.handle("term-list", (id) => api(id, "GET", "/api/terminals", null, { timeout: 8000 }));
+  ctx.handle("term-open", async ({ node: id, cols, rows }) => { const r = await api(id, "POST", "/api/terminals", { cols, rows }); await termAttach(id, r.id); return r; });
+  ctx.handle("term-attach", ({ node: id, sid }) => termAttach(id, sid));
+  ctx.handle("term-input", ({ node: id, sid, data }) => { const t = terms.get(termKey(id, sid)); if (t) t.socket.write(String(data)); return !!t; });
+  ctx.handle("term-resize", ({ node: id, sid, cols, rows }) => api(id, "POST", `/api/terminals/${sid}/resize`, { cols, rows }, { timeout: 8000 }));
+  ctx.handle("term-close", async ({ node: id, sid }) => { const key = termKey(id, sid), t = terms.get(key); if (t) { t.replaced = true; terms.delete(key); t.socket.destroy(); } return api(id, "DELETE", `/api/terminals/${sid}`, null, { timeout: 8000 }); });
+  ctx.onStop(() => { for (const t of terms.values()) { t.replaced = true; t.socket.destroy(); } terms.clear(); });
+
   // ---------------------------------------------------------------- ferramentas da IA (module.json "tools")
+  ctx.handle("tool:machine_health", async ({ machine }) => {
+    const k = String(machine || "").toLowerCase(), list = k ? nodes.filter((n) => n.name.toLowerCase().includes(k)) : nodes;
+    const out = [];
+    for (const n of list) {
+      try {
+        const m = await api(n.id, "GET", "/api/system/monitor", null, { timeout: 8000 });
+        out.push({ machine: n.name, online: true, cpu_percent: m.cpu.total, cores_percent: m.cpu.cores.map((c) => c.pct), cpu_temperature_c: m.cpuTemp, sensors: m.temps.map((t) => ({ sensor: `${t.chip} ${t.label}`, celsius: t.c })), fans_rpm: m.fans.map((f) => f.rpm),
+          memory_used_gb: +(m.memory.used / 1073741824).toFixed(1), memory_total_gb: +(m.memory.total / 1073741824).toFixed(1), disks: m.mounts.map((d) => ({ mount: d.mount, used_percent: d.total ? Math.round((d.used / d.total) * 100) : 0, free_gb: +(d.free / 1073741824).toFixed(1) })), load: m.load, uptime_hours: +(m.uptime / 3600).toFixed(1), alerts: m.alerts });
+      } catch (e) { out.push({ machine: n.name, online: false, error: e.message }); }
+    }
+    return { machines: out };
+  });
   const findServer = async (name) => {
     const all = [];
     for (const n of nodes) { try { for (const s of await api(n.id, "GET", "/api/servers", null, { timeout: 6000 })) all.push({ ...s, node: n.id, nodeName: n.name, host: n.host }); } catch {} }

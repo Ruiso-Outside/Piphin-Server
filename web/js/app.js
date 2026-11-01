@@ -75,9 +75,10 @@ piphin.on("agent-event", ({ node, type, data }) => {
     const s = srvList(node).find((x) => x.id === data.id);
     if (s) { s.state = data.state; renderSide(); }
     if (S.view.kind === "server" && S.view.server === data.id && S.srv) { S.srv.state = data.state; renderHeader(); }
-    if (S.view.kind === "node" && S.view.node === node) renderMain();
+    if (onOverview(node)) renderMain();
   }
   if (type === "changed") changedSoon(node, data);
+  if (type === "job" && S.view.node === node) machineJobEvent(data);
 });
 let changedTimer = null;
 function changedSoon(node, data) {
@@ -87,10 +88,10 @@ function changedSoon(node, data) {
     if (S.view.kind === "server" && S.view.server === data.id) {
       if (data.removed) return show("node", node);
       S.srv = srvList(node).find((x) => x.id === data.id) || S.srv; renderHeader();
-    } else if (S.view.kind === "node" && S.view.node === node) renderMain();
+    } else if (onOverview(node)) renderMain();
   }), 250);
 }
-piphin.on("node-status", ({ id, online }) => { const n = nodeOf(id); if (!n) return; n.online = online; if (online) loadServers(id).then(renderSide); renderSide(); if (S.view.node === id && S.view.kind === "node") renderMain(); });
+piphin.on("node-status", ({ id, online }) => { const n = nodeOf(id); if (!n) return; n.online = online; if (online) loadServers(id).then(renderSide); renderSide(); if (S.view.node === id && S.view.kind === "node") { if (onOverview(id) || !online) renderMain(); else if (online) machineBack(); } });
 piphin.on("transfer", (t) => {
   const el = $("#transfer");
   el.hidden = !!t.finished;
@@ -101,7 +102,9 @@ piphin.on("transfer", (t) => {
 
 // ---------------------------------------------------------------- navegação
 let poll = null;
+const onOverview = (node) => S.view.kind === "node" && S.view.node === node && S.nodeTab === "overview";
 function show(kind, node = null, server = null, tab = null) {
+  if (kind !== "node" || node !== S.view.node) S.nodeTab = "overview";
   S.view = { kind, node, server };
   if (tab) S.tab = tab; else if (kind === "server") S.tab = "console";
   clearInterval(poll); poll = null;
@@ -118,6 +121,8 @@ const loadNode = guard(async () => {
 });
 async function refreshNodeStats() {
   if (S.view.kind !== "node") return;
+  machineTick();
+  if (S.nodeTab !== "overview") return;
   try { S.nodeStats = await call("node-stats", S.view.node); const n = curNode(); if (n && !n.online) { n.online = true; renderSide(); } paintNodeStats(); } catch { /* fora do ar */ }
 }
 const loadServer = guard(async () => {
@@ -157,7 +162,7 @@ function renderMain() {
   const html = v.kind === "node" ? nodeView() : v.kind === "server" ? serverView() : home();
   $("#main").innerHTML = `<div class="wrap">${html}</div>`;
   if (v.kind === "server") { paintConsole(); paintServerStats(); if (S.tab === "files" && !S.files) loadFiles(S.filesPath); if (S.tab === "backups" && !S.backups) loadBackups(); if (S.tab === "schedules") fillNextRuns(); }
-  if (v.kind === "node") paintNodeStats();
+  if (v.kind === "node") { paintNodeStats(); machineMounted(); }
 }
 function home() {
   if (S.nodes.length) {
@@ -195,9 +200,11 @@ function nodeView() {
   return `<div class="head"><div class="ic"><i class="i i-hard-drive"></i></div>
       <div class="grow"><h1 class="t" data-noi18n>${esc(n.name)}</h1><div class="sub"><span class="pill ${n.online ? "running" : "offline"}">${n.online ? "Online" : "Fora do ar"}</span>
         <span class="mono" data-noi18n>${esc(n.host)}:${n.port}</span>${i ? `<span>Piphin Agent ${esc(i.version)}</span>` : ""}</div></div>
+      ${n.online ? "" : `<button class="btn violet" data-m="wake"><i class="i i-power"></i>Ligar pela rede</button>`}
       <button class="btn" data-act="rename-node"><i class="i i-pencil"></i>Renomear</button>
       <button class="btn ghost" data-act="remove-node" title="Esquecer esta máquina"><i class="i i-trash-2"></i></button></div>
-    ${i && !i.docker.ok ? `<div class="card danger row"><i class="i i-triangle-alert" style="color:var(--bad)"></i><div class="grow"><b>O Docker não está funcionando nesta máquina</b><div class="faint" data-noi18n>${esc(i.docker.error || "")}</div></div></div>` : ""}
+    ${machineTabs()}
+    ${S.nodeTab !== "overview" ? machineBody() : `<div id="alerts"></div>${i && !i.docker.ok ? `<div class="card danger row"><i class="i i-triangle-alert" style="color:var(--bad)"></i><div class="grow"><b>O Docker não está funcionando nesta máquina</b><div class="faint" data-noi18n>${esc(i.docker.error || "")}</div></div></div>` : ""}
     <div class="stats" id="nodeStats">${statCard("cpu", "Processador", "--", 0)}${statCard("memory-stick", "Memória", "--", 0)}${statCard("hard-drive", "Disco", "--", 0)}${statCard("activity", "Rede", "--", -1)}</div>
     <div><div class="row" style="margin-bottom:12px"><h3 class="h grow" style="margin:0"><i class="i i-layout-grid"></i>Servidores</h3><button class="btn violet" data-act="new-server" ${n.online ? "" : "disabled"}><i class="i i-plus"></i>Novo servidor</button></div>
       <div class="srv-grid">${list.map((s) => srvCard(s, n)).join("")}<div class="srv-card add" data-act="new-server"><i class="i i-plus"></i><b>Novo servidor</b><span class="meta">Jogos, sites, bots e bancos de dados</span></div></div></div>
@@ -205,7 +212,7 @@ function nodeView() {
       <dt>Sistema</dt><dd data-noi18n>${esc(i.info.os)}</dd><dt>Processador</dt><dd><span data-noi18n>${esc(i.info.cpu)}</span> · ${i.info.cores === 1 ? "1 núcleo" : `${i.info.cores} núcleos`}</dd>
       <dt>Memória</dt><dd>${bytes(i.info.memory)}</dd><dt>Ligada há</dt><dd>${uptime(i.info.uptime)}</dd>
       <dt>Endereços</dt><dd class="mono" data-noi18n>${esc(i.info.addresses.map((a) => a.ip).join(", "))}</dd><dt>Docker</dt><dd>${i.docker.ok ? esc(i.docker.version) : "não está rodando"}</dd>
-      <dt>Hubs pareados</dt><dd>${i.clients.length}</dd></dl></div>` : ""}`;
+      <dt>Hubs pareados</dt><dd>${i.clients.length}</dd></dl></div>` : ""}`}`;
 }
 const statCard = (ic, label, val, pct) => `<div class="stat"><div class="top"><i class="i i-${ic}"></i>${esc(label)}</div><b>${val}</b>${pct >= 0 ? `<div class="bar"><i style="width:${pct}%"></i></div>` : `<span class="faint">&nbsp;</span>`}</div>`;
 function paintNodeStats() {

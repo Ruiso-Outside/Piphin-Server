@@ -101,6 +101,11 @@ function attach(id, onData, onEnd) {
 const docker = {
   version: () => ok("GET", "/version"),
   info: () => ok("GET", "/info"),
+  df: () => ok("GET", "/system/df", null, { timeout: 120000 }),
+  // imagens sem contêiner nenhum, e contêineres parados que não são de um servidor do Piphin
+  prune: (what) => (what === "images"
+    ? ok("POST", `/images/prune?filters=${encodeURIComponent(JSON.stringify({ dangling: ["false"] }))}`, null, { timeout: 600000 })
+    : ok("POST", `/containers/prune?filters=${encodeURIComponent(JSON.stringify({ "label!": ["piphin.server"] }))}`, null, { timeout: 600000 })),
   imageExists: async (image) => (await request("GET", `/images/${encodeURIComponent(image)}/json`)).status === 200,
   async pull(image, onProgress) {
     // "eclipse-temurin:21-jre" -> nome + tag; "registro:5000/imagem" não tem tag (o ":" é da porta)

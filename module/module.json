@@ -17,6 +17,13 @@
       "input": { "type": "object", "properties": {} }
     },
     {
+      "name": "machine_health",
+      "title": "Saúde da máquina",
+      "readOnly": true,
+      "description": "Mostra a saúde das máquinas com o Piphin Agent: uso de cada núcleo, temperaturas, ventoinhas, memória, discos, carga e alertas. Use quando perguntarem se a máquina está bem, quente ou lenta.",
+      "input": { "type": "object", "properties": { "machine": { "type": "string", "description": "Nome da máquina (vazio = todas)" } } }
+    },
+    {
       "name": "server_logs",
       "title": "Ler o console de um servidor",
       "readOnly": true,
