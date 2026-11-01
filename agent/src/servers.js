@@ -8,6 +8,8 @@ const crypto = require("crypto");
 const { EventEmitter } = require("events");
 const docker = require("./docker");
 const templates = require("./templates");
+const files = require("./files");
+const eggs = require("./eggs");
 
 const MAX_LINES = 1500;
 const now = () => Date.now();
@@ -57,7 +59,7 @@ class Servers extends EventEmitter {
     return { id: s.id, name: s.name, template: s.template, templateName: s.templateName, icon: s.icon, category: s.category, image: s.image,
       state: s.installState === "installing" ? "installing" : s.installState === "failed" ? "install_failed" : r.state,
       ports: s.ports, limits: s.limits, autostart: s.autostart, autoRestart: s.autoRestart, vars: s.vars, startup: s.startup, createdAt: s.createdAt,
-      stats: r.stats, disk: r.disk, startedAt: r.started || null, schedules: s.schedules || [], description: s.description || "" };
+      egg: !!s.egg, extraPorts: s.extraPorts || [], stats: r.stats, disk: r.disk, startedAt: r.started || null, schedules: s.schedules || [], description: s.description || "" };
   }
   list() { return [...this.map.values()].map((s) => this.view(s)).sort((a, b) => a.createdAt - b.createdAt); }
 
@@ -104,6 +106,7 @@ class Servers extends EventEmitter {
       s.image = vars.IMAGE; s.mount = /^\/[\w./-]*$/.test(vars.MOUNT || "") ? vars.MOUNT : "/home/container";
       if (!/^[\w./:@-]+$/.test(s.image)) throw new Error("Imagem do Docker inválida");
     }
+    if (t.egg) { s.egg = true; s.extraPorts = parseExtraPorts(spec.extraPorts); this.syncEggPorts(s, true); }
     fs.mkdirSync(this.dataDir(id), { recursive: true });
     this.map.set(id, s); this.save(s);
     this.emit("changed", { id });
@@ -117,6 +120,7 @@ class Servers extends EventEmitter {
     this.system(id, reinstall ? "Reinstalando..." : "Instalando...");
     try {
       await this.ensureImage(id, s.image);
+      if (t && t.eggInstall) await this.installEgg(id, s, t);
       if (t && t.install) {
         const img = t.installImage || "alpine:3.20";
         await this.ensureImage(id, img);
@@ -155,6 +159,76 @@ class Servers extends EventEmitter {
       throw e;
     }
   }
+  // egg: o script roda como no Pterodactyl, em /mnt/install/install.sh com a pasta do servidor em /mnt/server
+  async installEgg(id, s, t) {
+    const { script, container, entrypoint } = t.eggInstall;
+    await this.ensureImage(id, container);
+    const name = `piphin-install-${id}`, file = path.join(this.dir(id), "install.sh");
+    fs.writeFileSync(file, script);
+    await docker.remove(name).catch(() => {});
+    const c = await docker.create(name, {
+      Image: container, Cmd: [entrypoint, "/mnt/install/install.sh"], User: "0:0", Env: this.envList(s), Labels: { "piphin.install": id },
+      HostConfig: { Binds: [`${this.dataDir(id)}:/mnt/server`, `${file}:/mnt/install/install.sh:ro`], NetworkMode: "bridge", Memory: Math.max(s.limits.memory, 1024) * 1024 * 1024 },
+    });
+    const con = await docker.attach(c.Id, (txt) => this.print(id, txt, "install"));
+    await docker.start(c.Id);
+    const res = await docker.wait(c.Id);
+    con.close();
+    await docker.remove(c.Id).catch(() => {});
+    fs.rmSync(file, { force: true });
+    // muitos scripts de egg terminam com um comando sem importância que falha: o Pterodactyl segue em frente, aqui também
+    if (res.StatusCode !== 0) this.system(id, `O script de instalação terminou com o código ${res.StatusCode}. Se o servidor não ligar, veja as mensagens acima.`);
+  }
+  // portas do egg: a principal, as das variáveis (QUERY_PORT...) e as extras; bump = trocar por uma livre em vez de recusar
+  syncEggPorts(s, bump = false) {
+    const t = templates.get(s.template), main = s.ports[0], used = this.usedPorts(s.id), seen = new Set([main.host]), out = [main];
+    const busy = (p) => ["tcp", "udp", "both"].some((x) => used.has(`${p}/${x}`));
+    const add = (host, name) => { seen.add(host); out.push({ name, container: host, host, protocol: "both", auto: true }); };
+    for (const [k, val] of Object.entries(s.vars || {})) {
+      let p = Number(val);
+      if (!eggs.isPortVar(k) || !Number.isInteger(p) || p < 1 || p > 65535) continue;
+      if (seen.has(p) && !bump) continue;
+      if (seen.has(p) || busy(p)) {
+        if (!bump) throw new Error(`A porta ${p} já é usada por outro servidor`);
+        while (seen.has(p) || busy(p)) if (++p > 65535) throw new Error(`Não há porta livre perto da ${val}`);
+        s.vars[k] = String(p);
+      }
+      const v = t && (t.vars || []).find((x) => x.key === k);
+      add(p, v ? v.name : k);
+    }
+    for (const p of s.extraPorts || []) {
+      if (seen.has(p)) continue;
+      if (busy(p)) throw new Error(`A porta ${p} já é usada por outro servidor`);
+      add(p, "Extra");
+    }
+    s.ports = out;
+  }
+  // o que o egg pede antes de ligar: EULA aceito e os arquivos de configuração com as portas e opções atuais
+  async applyEggFiles(s) {
+    const t = templates.get(s.template), root = this.dataDir(s.id); if (!t) return;
+    const env = this.envMap(s), port = s.ports[0] ? String(s.ports[0].container) : "", mem = String(s.limits.memory || 1024);
+    const owner = process.platform === "linux" && s.chown ? s.chown.split(":").map(Number) : null;
+    const put = async (full, text) => {
+      const made = fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, text);
+      if (owner) { if (made) require("child_process").execFileSync("chown", ["-R", s.chown, made]); fs.lchownSync(full, owner[0], owner[1]); }
+    };
+    if (t.eula) { const f = files.resolve(root, "eula.txt"); await files.real(root, f); await put(f, "eula=true\n"); }
+    for (const [rel, c] of Object.entries(t.configFiles || {})) {
+      try {
+        const edit = c && eggs.PARSERS[c.parser]; if (!edit) continue;
+        const f = files.resolve(root, rel); await files.real(root, f);
+        let before = ""; try { before = fs.readFileSync(f, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; if (c.parser === "file") continue; }
+        const find = {};
+        for (const [k, v] of Object.entries(c.find || {})) {
+          const fix = (x) => (typeof x === "string" ? eggs.fill(x, env, port, mem) : x);
+          find[fix(k)] = v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([a, b]) => [a, fix(b)])) : fix(v);
+        }
+        const after = edit(before, find);
+        if (after !== before) await put(f, after);
+      } catch (e) { this.system(s.id, `Não deu para ajustar ${rel}: ${e.message}`); }
+    }
+  }
   async ensureImage(id, image) {
     if (await docker.imageExists(image)) return;
     this.system(id, `Baixando a imagem ${image}...`);
@@ -169,6 +243,8 @@ class Servers extends EventEmitter {
     const fromVars = Object.fromEntries(Object.entries(s.envFromVars || {}).map(([k, v]) => [k, s.vars[v] ?? ""]));
     const port = p0 ? String(p0.container) : "";
     // a JVM usa um pouco mais que o heap: deixa 15% de folga para o contêiner não ser morto por falta de memória
+    if (s.egg) return { PORT: port, ...s.vars, SERVER_PORT: port, SERVER_MEMORY: String(mem), SERVER_IP: "0.0.0.0", HOME: s.mount, USER: "container", TZ: process.env.TZ || "America/Sao_Paulo",
+      P_SERVER_LOCATION: "piphin", P_SERVER_UUID: s.id, P_SERVER_ALLOCATION_LIMIT: "0", PIPHIN_SERVER: s.id, STARTUP: eggStartup(s.startup) };
     return { ...s.env, ...s.vars, ...fromVars, SERVER_PORT: port, PORT: port, SERVER_MEMORY: String(mem), SERVER_MEMORY_JVM: String(Math.max(256, Math.floor(mem * 0.85))),
       SERVER_IP: "0.0.0.0", HOME: s.mount, TZ: process.env.TZ || "America/Sao_Paulo", PIPHIN_SERVER: s.id };
   }
@@ -203,13 +279,14 @@ class Servers extends EventEmitter {
     this.setState(id, "starting");
     try {
       await this.ensureImage(id, s.image);
+      if (s.egg) await this.applyEggFiles(s);
       await docker.remove(name).catch(() => {});
       const exposed = {}, bindings = {};
       for (const p of s.ports || []) for (const proto of p.protocol === "both" ? ["tcp", "udp"] : [p.protocol]) {
         exposed[`${p.container}/${proto}`] = {};
         bindings[`${p.container}/${proto}`] = [{ HostIp: "", HostPort: String(p.host) }];
       }
-      const line = this.startupLine(s);
+      const line = s.egg ? "" : this.startupLine(s);
       const body = {
         Image: s.image, Env: this.envList(s), Labels: { "piphin.server": id }, ExposedPorts: exposed,
         Tty: false, OpenStdin: true, StdinOnce: false, AttachStdin: true, AttachStdout: true, AttachStderr: true,
@@ -291,6 +368,7 @@ class Servers extends EventEmitter {
     if (patch.autostart != null) s.autostart = !!patch.autostart;
     if (patch.autoRestart != null) s.autoRestart = !!patch.autoRestart;
     if (patch.startup != null && t && t.editableStartup) s.startup = String(patch.startup);
+    if (patch.startup != null && s.egg && !String(patch.startup).trim()) s.startup = t ? t.startup : s.startup;
     if (patch.image && t && t.images && t.images.some((x) => x.image === patch.image)) s.image = patch.image;
     if (patch.image && s.template === "custom") s.image = String(patch.image).trim();
     if (Array.isArray(patch.ports)) {
@@ -299,12 +377,13 @@ class Servers extends EventEmitter {
         const h = Number(patch.ports[i]);
         if (!h || h === p.host) return p;
         if (h < 1 || h > 65535) throw new Error(`Porta inválida: ${h}`);
-        if (used.has(`${h}/${p.protocol}`)) throw new Error(`A porta ${h} já é usada por outro servidor`);
+        if (["tcp", "udp", "both"].some((x) => (p.protocol === "both" || x === "both" || x === p.protocol) && used.has(`${h}/${x}`))) throw new Error(`A porta ${h} já é usada por outro servidor`);
         return { ...p, host: h, container: p.container === p.host ? h : p.container };
       });
       // portas seguidas acompanham a primeira
       for (const p of s.ports) if (p.offset != null) { const h = s.ports[0].host + p.offset; if (p.container === p.host) p.container = h; p.host = h; }
     }
+    if (s.egg) { if (patch.extraPorts != null) s.extraPorts = parseExtraPorts(patch.extraPorts); this.syncEggPorts(s); }
     if (Array.isArray(patch.schedules)) s.schedules = patch.schedules.slice(0, 30).map((x) => ({ id: x.id || crypto.randomBytes(3).toString("hex"), cron: String(x.cron || ""), action: ["restart", "start", "stop", "backup", "command"].includes(x.action) ? x.action : "restart", payload: String(x.payload || "").slice(0, 500), enabled: x.enabled !== false, last: x.last || null }));
     this.save(s);
     this.emit("changed", { id });
@@ -393,5 +472,18 @@ class Servers extends EventEmitter {
   }
 }
 
+// a imagem do egg troca {{NOME}} sozinha; os nomes do painel viram os das variáveis
+const eggStartup = (line) => String(line || "").replace(/\{\{\s*server\.build\.default\.port\s*\}\}/g, "{{SERVER_PORT}}").replace(/\{\{\s*server\.build\.default\.ip\s*\}\}/g, "{{SERVER_IP}}")
+  .replace(/\{\{\s*server\.build\.memory\s*\}\}/g, "{{SERVER_MEMORY}}").replace(/\{\{\s*(?:server\.build\.env\.|env\.)(\w+)\s*\}\}/g, "{{$1}}");
+function parseExtraPorts(x) {
+  const list = Array.isArray(x) ? x : String(x || "").split(/[\s,;]+/).filter(Boolean);
+  const out = [];
+  for (const v of list) {
+    const p = Number(v);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error(`Porta inválida: ${v}`);
+    if (!out.includes(p)) out.push(p);
+  }
+  return out.slice(0, 30);
+}
 function safeRegex(src) { try { return new RegExp(src); } catch { return /$^/; } }
 module.exports = Servers;

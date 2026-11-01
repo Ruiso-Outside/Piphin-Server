@@ -30,6 +30,21 @@ São duas partes:
 
 Cada modelo é um arquivo em `agent/templates/` (variáveis, imagem, script de instalação, comando de início, como parar e a frase que indica que ligou). A versão do Java do Minecraft é escolhida sozinha pela versão do jogo (8, 17, 21 ou 25).
 
+## Eggs do Pterodactyl
+
+No assistente de novo servidor, a aba **Eggs** mostra o catálogo de [eggs.pterodactyl.io](https://eggs.pterodactyl.io/) (mais de 300 jogos e aplicativos), com busca. Ao clicar num egg, o Hub baixa o arquivo e o agente guarda como um modelo da máquina. Também dá para importar um arquivo `.json` de egg de qualquer lugar.
+
+O agente faz o que o painel do Pterodactyl faria:
+
+- roda o script de instalação do egg no contêiner dele, com a pasta do servidor em `/mnt/server`
+- usa as imagens do egg, que recebem a linha de início na variável `STARTUP`
+- transforma as regras das variáveis em campos do formulário (lista, número, Sim/Não, obrigatório) e não mostra as variáveis fixas
+- ajusta os arquivos de configuração do egg a cada início (`properties`, `ini`, `json`, `yaml`, `xml` e `file`)
+- pede o aceite do EULA quando o egg exige
+- abre a porta principal em TCP e UDP, as portas das opções (como `QUERY_PORT`) e as **portas extras** que você informar
+
+Eggs importados ficam em `/var/lib/piphin-agent/eggs`. Os textos dos eggs vêm em inglês. Um egg roda um script dentro de um contêiner, então só importe arquivos de quem você confia.
+
 ## Instalar na máquina Ubuntu
 
 No terminal do Ubuntu (ou por SSH):
@@ -47,6 +62,8 @@ O instalador:
 5. mostra o código de pareamento
 
 Depois, no Hub, abra o Piphin Server, clique em **Procurar na rede** e digite o código. Para desinstalar: `sudo bash install.sh --uninstall`.
+
+Para atualizar o agente, rode o mesmo comando de instalação de novo: os servidores continuam ligados, e a configuração e o pareamento são mantidos.
 
 ### Comandos do agente
 
@@ -67,7 +84,7 @@ sudo piphin-agent revoke ID # tira o acesso de um Hub
 
 ## Estrutura
 
-- `agent/src/`: `main.js` (linha de comando, API HTTPS, eventos ao vivo, descoberta), `docker.js` (API do Docker pelo socket), `servers.js` (ciclo de vida), `files.js`, `backups.js`, `schedules.js`, `host.js`, `auth.js`, `templates.js`
+- `agent/src/`: `main.js` (linha de comando, API HTTPS, eventos ao vivo, descoberta), `docker.js` (API do Docker pelo socket), `servers.js` (ciclo de vida), `files.js`, `backups.js`, `schedules.js`, `host.js`, `auth.js`, `templates.js`, `eggs.js` (eggs do Pterodactyl)
 - `agent/templates/`: os modelos
 - `agent/install.sh`: o instalador
 - `module/`: `module.json` e `backend.js` (conversa com os agentes)

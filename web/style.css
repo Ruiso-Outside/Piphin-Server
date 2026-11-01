@@ -153,3 +153,13 @@ h3.h .i { color: var(--sv-2); }
 .welcome .hero .ic .i { font-size: 34px; }
 .welcome .hero h1 { margin: 0; font: 800 28px var(--p-font-display); }
 .welcome .hero p { margin: 0; color: var(--p-text-2); line-height: 1.6; max-width: 620px; }
+
+.egg-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.egg-search { flex: 1 1 200px; position: relative; display: flex; align-items: center; }
+.egg-search .i { position: absolute; left: 10px; opacity: .6; pointer-events: none; }
+.egg-search input { width: 100%; padding-left: 32px; }
+.egg-item { position: relative; display: flex; min-width: 0; }
+.egg-item .tpl { flex: 1; min-width: 0; text-align: left; }
+.egg-item .tpl span:not(.badge) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.egg-item .egg-del { position: absolute; top: 6px; right: 6px; }
+#eggList { overflow-x: hidden; }

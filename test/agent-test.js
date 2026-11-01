@@ -131,6 +131,47 @@ const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now
     }
     ok((await api("POST", "/api/servers", { template: "valheim", vars: { PASSWORD: "123" } })).status >= 400, "Valheim com senha curta é recusado");
 
+    console.log("eggs do Pterodactyl");
+    const egg = { meta: { version: "PTDL_v2" }, name: "Paper Teste", author: "t@t", description: "d", features: ["eula"], docker_images: { "Java 21": "ghcr.io/ptero-eggs/yolks:java_21" },
+      startup: "java -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}} --port {{server.build.default.port}}",
+      config: { files: JSON.stringify({ "server.properties": { parser: "properties", find: { "server-ip": "0.0.0.0", "server-port": "{{server.build.default.port}}", motd: "{{server.build.env.MOTD}}" } }, "../fora.txt": { parser: "properties", find: { a: "1" } } }), startup: JSON.stringify({ done: ")! For help, type " }), logs: "{}", stop: "stop" },
+      scripts: { installation: { script: "#!/bin/ash\r\necho instalando\r\n", container: "ghcr.io/ptero-eggs/installers:alpine", entrypoint: "ash" } },
+      variables: [{ name: "Jar", env_variable: "SERVER_JARFILE", default_value: "server.jar", user_viewable: true, user_editable: true, rules: "required|string" },
+        { name: "Motd", env_variable: "MOTD", default_value: "oi", user_viewable: true, user_editable: true, rules: "nullable|string" },
+        { name: "Build", env_variable: "BUILD", default_value: "fixo", user_viewable: false, user_editable: false, rules: "string" },
+        { name: "Query", env_variable: "QUERY_PORT", default_value: "27100", user_viewable: true, user_editable: true, rules: "required|numeric|between:1,65535" },
+        { name: "Banco", env_variable: "DATABASE_PORT", default_value: "3306", user_viewable: true, user_editable: true, rules: "numeric" },
+        { name: "Ligado", env_variable: "ATIVO", default_value: "1", user_viewable: true, user_editable: true, rules: "required|boolean" }] };
+    ok((await api("POST", "/api/eggs", { egg: { name: "x" } })).status === 400, "arquivo que não é egg é recusado");
+    r = await api("POST", "/api/eggs", { egg, slug: "games-paper-teste" });
+    ok(r.status === 200 && r.body.id === "egg-games-paper-teste" && r.body.category === "eggs", "importa o egg");
+    ok(!JSON.stringify(r.body).includes("instalando") && !r.body.vars.some((v) => v.key === "BUILD"), "o painel não recebe o script nem as variáveis fixas");
+    ok(r.body.vars.find((v) => v.key === "ATIVO").options[0].value === "1", "regra boolean vira Sim/Não com os valores do egg");
+    ok((await api("POST", "/api/servers", { template: "egg-games-paper-teste", vars: { PIPHIN_EULA: "false" } })).status >= 400, "egg com EULA pede o aceite");
+    r = await api("POST", "/api/servers", { template: "egg-games-paper-teste", name: "Do Egg", vars: { PIPHIN_EULA: "true", BUILD: "mudado" }, extraPorts: "28000, 28001", ports: [30100] });
+    ok(r.status === 200 && r.body.egg && r.body.ports[0].host === 30100 && r.body.ports[0].protocol === "both", "cria o servidor na porta pedida, TCP e UDP");
+    const eid = r.body.id;
+    ok(r.body.ports.map((p) => p.host).join() === "30100,27100,28000,28001", "abre as portas das variáveis e as extras, mas não a do banco");
+    ok(r.body.vars.BUILD === "fixo", "variável fixa não muda");
+    ok(await until(async () => (await api("GET", `/api/servers/${eid}`)).body.state === "running", 20000), "instala e fica 'running' com a frase do egg");
+    let con = (await api("GET", `/api/servers/${eid}/console`)).body.map((l) => l.s).join("\n");
+    ok(/egg: ash \/mnt\/install\/install\.sh · #!\/bin\/ash\r?$/m.test(con) && !/#!\/bin\/ash\r/.test(con), "roda o script no /mnt/install, sem os CRLF");
+    ok(con.includes("STARTUP=java -Xmx{{SERVER_MEMORY}}M -jar {{SERVER_JARFILE}} --port {{SERVER_PORT}} cmd=nao"), "a imagem recebe a linha de início em STARTUP, sem Cmd");
+    ok(/portas=.*30100\/tcp.*30100\/udp/.test(con), "publica TCP e UDP");
+    const eggData = path.join(TMP, "data", "servers", eid, "data");
+    const props = fs.readFileSync(path.join(eggData, "server.properties"), "utf8");
+    ok(props.includes("server-port=30100") && props.includes("motd=oi") && props.includes("server-ip=0.0.0.0"), "ajusta o server.properties do egg");
+    ok(fs.readFileSync(path.join(eggData, "eula.txt"), "utf8").includes("eula=true"), "grava o EULA aceito");
+    ok(!fs.existsSync(path.join(TMP, "data", "servers", eid, "fora.txt")), "arquivo do egg não sai da pasta do servidor");
+    r = await api("PATCH", `/api/servers/${eid}`, { vars: { QUERY_PORT: "27200" }, extraPorts: "" });
+    ok(r.body.ports.map((p) => p.host).join() === "30100,27200", "mudar a variável muda a porta aberta");
+    ok((await api("DELETE", "/api/eggs/egg-games-paper-teste")).status === 409, "egg em uso não pode ser apagado");
+    r = await api("POST", `/api/servers/${eid}/power`, { action: "stop" });
+    ok(await until(async () => (await api("GET", `/api/servers/${eid}`)).body.state === "offline"), "desliga com o comando do egg");
+    ok((await api("DELETE", `/api/servers/${eid}`)).status === 200 && (await api("DELETE", "/api/eggs/egg-games-paper-teste")).status === 200, "apaga o servidor e depois o egg");
+    ok(!(await api("GET", "/api/templates")).body.some((t) => t.egg), "o egg sai da lista");
+    await api("POST", "/api/eggs", { egg, slug: "games-fica" });
+
     console.log("apagar e reiniciar o agente");
     ok((await api("DELETE", `/api/servers/${r2.body.id}`)).status === 200, "apaga um servidor");
     agent.kill(); await sleep(500);
@@ -138,6 +179,7 @@ const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now
     await sleep(1500);
     r = await api("GET", "/api/servers");
     ok(r.body.length === 5 && !r.body.some((s) => s.id === r2.body.id), "depois de reiniciar, os servidores continuam (5)");
+    ok((await api("GET", "/api/templates")).body.some((t) => t.id === "egg-games-fica"), "depois de reiniciar, os eggs continuam");
     again.kill();
   } catch (e) { fail++; console.log("ERRO", e.stack); }
   console.log(`\n${pass} ok, ${fail} falharam`);

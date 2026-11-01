@@ -101,4 +101,4 @@ async function stream(root, rel) {
   return { size: st.size, name: path.basename(f), stream: fs.createReadStream(f) };
 }
 
-module.exports = { resolve, list, read, write, mkdir, rename, remove, upload, stream };
+module.exports = { resolve, real, list, read, write, mkdir, rename, remove, upload, stream };

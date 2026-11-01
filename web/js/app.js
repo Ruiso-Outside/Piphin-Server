@@ -16,7 +16,11 @@ function uptime(sec) {
   return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`;
 }
 const STATE = { running: "Rodando", starting: "Iniciando", stopping: "Parando", offline: "Desligado", installing: "Instalando", install_failed: "Instalação falhou" };
-const CATS = [["jogos", "Jogos", "gamepad-2"], ["bots", "Bots", "bot"], ["sites", "Sites e apps", "globe"], ["bancos", "Bancos de dados", "database"], ["outros", "Outros", "box"]];
+const CATS = [["jogos", "Jogos", "gamepad-2"], ["bots", "Bots", "bot"], ["sites", "Sites e apps", "globe"], ["bancos", "Bancos de dados", "database"], ["outros", "Outros", "box"], ["eggs", "Eggs", "egg"]];
+const EGG_GROUPS = [["", "Todos"], ["games", "Jogos"], ["applications", "Aplicativos"], ["generic", "Linguagens"]];
+const EGG_MIN_AGENT = "1.1.0";
+const olderThan = (v, min) => { const a = String(v || "0").split(".").map(Number), b = min.split(".").map(Number); for (let i = 0; i < 3; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) < b[i]; return false; };
+const protoName = (p) => (p === "both" ? "TCP+UDP" : String(p).toUpperCase());
 
 const S = { nodes: [], servers: {}, templates: {}, view: { kind: "home" }, tab: "console", nodeInfo: null, nodeStats: null,
   srv: null, console: [], stats: null, files: null, filesPath: "/", backups: null, cmdHistory: [], cmdIdx: -1, busy: {} };
@@ -396,7 +400,7 @@ function settingsTab() {
       ${t && t.images ? `<div class="sect"><label>Versão do ambiente<select id="sImage">${t.images.map((i) => `<option value="${esc(i.image)}" ${i.image === s.image ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select></label></div>` : ""}
       ${s.template === "custom" ? `<div class="sect"><label>Imagem do Docker<input type="text" id="sImageCustom" value="${esc(s.image)}" class="mono" data-noi18n></label></div>` : ""}
       ${t && t.editableStartup ? `<div class="sect"><label>Comando de início (vazio = o da imagem)<input type="text" id="sStartup" value="${esc(s.startup)}" class="mono" data-noi18n></label></div>` : ""}
-      ${s.ports.length ? `<div class="sect"><b>Portas</b><div class="three">${s.ports.map((p, i) => `<label>${esc(p.name)} (${p.protocol.toUpperCase()})<input type="number" min="1" max="65535" data-port="${i}" value="${p.host}" ${p.offset != null ? "disabled" : ""}></label>`).join("")}</div></div>` : ""}
+      ${s.ports.length ? `<div class="sect"><b>Portas</b><div class="three">${s.ports.map((p, i) => `<label>${esc(p.name)} (${protoName(p.protocol)})<input type="number" min="1" max="65535" data-port="${i}" value="${p.host}" ${p.offset != null || p.auto ? "disabled" : ""}></label>`).join("")}</div>${s.egg ? `<label style="margin-top:10px">Portas extras<input type="text" id="sExtra" value="${esc((s.extraPorts || []).join(", "))}" class="mono" data-noi18n><span class="hint">Portas a mais que o programa usa, separadas por vírgula. As portas das opções (como QUERY_PORT) abrem sozinhas.</span></label>` : ""}</div>` : ""}
       <div class="sect"><b>Limites</b><div class="three">
         <label>Memória (MB)<input type="number" id="lMem" min="0" step="256" value="${s.limits.memory}"><span class="hint">0 = sem limite</span></label>
         <label>Processador (núcleos)<input type="number" id="lCpu" min="0" step="0.5" value="${s.limits.cpu}"><span class="hint">0 = sem limite</span></label>
@@ -433,7 +437,70 @@ async function newServerWizard(nodeId) {
   let tpls;
   try { tpls = await templatesOf(nodeId); } catch (e) { $("#wiz").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
   let cat = "jogos";
+  let eggQuery = "", eggGroup = "";
+  const reloadTpls = async () => { delete S.templates[nodeId]; tpls = await templatesOf(nodeId); };
+  const catTabs = () => `<div class="tpl-cats">${CATS.map(([k, t, ic]) => `<button class="${k === cat ? "on" : ""}" data-cat="${k}"><i class="i i-${ic}"></i> ${t}</button>`).join("")}</div>`;
+  const eggsPane = guard(async () => {
+    $("#wiz").innerHTML = `${catTabs()}<div class="empty"><span class="spin"></span></div><div class="modal-actions"><button class="btn" data-x>Cancelar</button></div>`;
+    box.querySelector("[data-x]").onclick = closeModal;
+    $$("[data-cat]").forEach((b) => (b.onclick = () => { cat = b.dataset.cat; pick(); }));
+    const info = await call("node-info", nodeId);
+    if (cat !== "eggs") return;
+    if (olderThan(info.version, EGG_MIN_AGENT)) {
+      const cmd = await call("install-command");
+      $("#wiz").innerHTML = `${catTabs()}<div class="card" style="margin-bottom:14px"><p style="margin-top:0"><b>Atualize o agente para usar eggs</b></p>
+        <p class="muted">Esta máquina está com o agente <span data-noi18n>${esc(info.version)}</span>. Rode este comando no Ubuntu. Os servidores continuam ligados durante a atualização.</p>
+        <div class="cmdbox"><code data-noi18n>${esc(cmd)}</code><button class="btn sm" data-copy="${esc(cmd)}"><i class="i i-copy"></i>Copiar</button></div></div>
+        <div class="modal-actions"><button class="btn" data-x>Cancelar</button></div>`;
+      box.querySelector("[data-x]").onclick = closeModal;
+      $$("[data-cat]").forEach((b) => (b.onclick = () => { cat = b.dataset.cat; pick(); }));
+      return;
+    }
+    if (!S.eggCatalog) S.eggCatalog = await call("egg-catalog");
+    if (cat !== "eggs") return;
+    $("#wiz").innerHTML = `${catTabs()}
+      <div class="egg-tools"><div class="egg-search"><i class="i i-search"></i><input type="text" id="eggSearch" placeholder="Procurar egg" value="${esc(eggQuery)}" data-noi18n></div>
+        <div class="tpl-cats" style="margin:0">${EGG_GROUPS.map(([k, t]) => `<button class="${k === eggGroup ? "on" : ""}" data-egg-group="${k}">${t}</button>`).join("")}</div>
+        <button class="btn sm" data-egg-file><i class="i i-upload"></i>Importar arquivo</button></div>
+      <div class="tpl-grid" id="eggList"></div>
+      <p class="faint" style="margin:10px 0 0">Eggs vêm de eggs.pterodactyl.io, com textos em inglês. Cada servidor roda isolado no Docker. Só importe arquivos de quem você confia.</p>
+      <div class="modal-actions"><button class="btn" data-x>Cancelar</button></div>`;
+    box.querySelector("[data-x]").onclick = closeModal;
+    $$("[data-cat]").forEach((b) => (b.onclick = () => { cat = b.dataset.cat; pick(); }));
+    const paint = () => {
+      const q = eggQuery.trim().toLowerCase(), hit = (x) => !q || `${x.name} ${x.description}`.toLowerCase().includes(q);
+      const mine = tpls.filter((t) => t.egg && hit(t)), ids = new Set(tpls.filter((t) => t.egg).map((t) => t.id));
+      const rest = S.eggCatalog.filter((e) => !ids.has("egg-" + e.slug) && (!eggGroup || e.group === eggGroup) && hit(e));
+      $("#eggList").innerHTML = mine.map((t) => `<div class="egg-item"><button class="tpl" data-egg-open="${esc(t.id)}"><div class="ic"><i class="i i-egg"></i></div><div><b data-noi18n>${esc(t.name)}</b> <span class="badge">Na máquina</span><br><span data-noi18n>${esc(t.description)}</span></div></button><button class="btn sm ghost egg-del" data-egg-del="${esc(t.id)}" title="Tirar da máquina"><i class="i i-trash-2"></i></button></div>`).join("")
+        + rest.map((e) => `<div class="egg-item"><button class="tpl" data-egg-get="${esc(e.slug)}"><div class="ic"><i class="i i-egg"></i></div><div><b data-noi18n>${esc(e.name)}</b><br><span data-noi18n>${esc(e.description)}</span></div></button></div>`).join("")
+        || `<div class="empty">Nenhum egg encontrado.</div>`;
+    };
+    paint();
+    $("#eggSearch").oninput = (ev) => { eggQuery = ev.target.value; paint(); };
+    $$("[data-egg-group]").forEach((b) => (b.onclick = () => { eggGroup = b.dataset.eggGroup; $$("[data-egg-group]").forEach((x) => x.classList.toggle("on", x === b)); paint(); }));
+    box.querySelector("[data-egg-file]").onclick = guard(async () => {
+      const t = await call("egg-import-file", { node: nodeId });
+      if (!t) return;
+      await reloadTpls(); toast("Egg importado", "ok");
+      configure(tpls.find((x) => x.id === t.id));
+    });
+    $("#eggList").onclick = guard(async (ev) => {
+      const del = ev.target.closest("[data-egg-del]");
+      if (del) { await call("egg-delete", { node: nodeId, egg: del.dataset.eggDel }); await reloadTpls(); toast("Egg removido", "ok"); return paint(); }
+      const open = ev.target.closest("[data-egg-open]");
+      if (open) return configure(tpls.find((x) => x.id === open.dataset.eggOpen));
+      const get = ev.target.closest("[data-egg-get]"); if (!get) return;
+      const e = S.eggCatalog.find((x) => x.slug === get.dataset.eggGet);
+      get.disabled = true; get.querySelector(".ic").innerHTML = `<span class="spin"></span>`;
+      try {
+        const t = await call("egg-import", { node: nodeId, slug: e.slug, url: e.url });
+        await reloadTpls();
+        configure(tpls.find((x) => x.id === t.id));
+      } catch (err) { paint(); throw err; }
+    });
+  });
   const pick = () => {
+    if (cat === "eggs") return eggsPane();
     $("#wiz").innerHTML = `<div class="tpl-cats">${CATS.map(([k, t, ic]) => `<button class="${k === cat ? "on" : ""}" data-cat="${k}"><i class="i i-${ic}"></i> ${t}</button>`).join("")}</div>
       <div class="tpl-grid">${tpls.filter((t) => t.category === cat).map((t) => `<button class="tpl" data-tpl="${t.id}"><div class="ic"><i class="i i-${esc(t.icon)}"></i></div><div><b>${esc(t.name)}</b><br><span>${esc(t.description)}</span></div></button>`).join("")}</div>
       <div class="modal-actions"><button class="btn" data-x>Cancelar</button></div>`;
@@ -448,8 +515,8 @@ async function newServerWizard(nodeId) {
         <div class="two"><label>Nome do servidor<input type="text" id="wName" value="${esc(t.name)}" maxlength="60" data-noi18n></label>
           ${t.images ? `<label>Versão do ambiente<select id="wImage">${t.images.map((i) => `<option value="${esc(i.image)}">${esc(i.name)}</option>`).join("")}</select></label>` : "<span></span>"}</div>
         ${t.vars.length ? `<div class="sect"><b>Opções</b><div class="form" id="wVars">${t.vars.map((v) => varInput(v, v.default, "w")).join("")}</div></div>` : ""}
-        ${t.editableStartup ? `<label>Comando de início (vazio = o da imagem)<input type="text" id="wStartup" class="mono" data-noi18n></label>` : ""}
-        ${t.ports.length ? `<div class="sect"><b>Portas</b><div class="three">${t.ports.map((p, i) => `<label>${esc(p.name)} (${p.protocol.toUpperCase()})<input type="number" min="1" max="65535" data-wport="${i}" value="${p.default || ""}" ${i > 0 && !p.default ? "disabled placeholder='automática'" : ""}></label>`).join("")}</div><span class="hint">Se a porta já estiver em uso, a próxima livre é escolhida.</span></div>` : ""}
+        ${t.editableStartup ? `<label>Comando de início (vazio = o da imagem)<input type="text" id="wStartup" class="mono" value="${t.egg ? esc(t.startup || "") : ""}" data-noi18n></label>` : ""}
+        ${t.ports.length ? `<div class="sect"><b>Portas</b><div class="three">${t.ports.map((p, i) => `<label>${esc(p.name)} (${protoName(p.protocol)})<input type="number" min="1" max="65535" data-wport="${i}" value="${p.default || ""}" ${i > 0 && !p.default ? "disabled placeholder='automática'" : ""}></label>`).join("")}</div><span class="hint">Se a porta já estiver em uso, a próxima livre é escolhida.</span>${t.egg ? `<label style="margin-top:10px">Portas extras<input type="text" id="wExtra" class="mono" placeholder="2457, 2458" data-noi18n><span class="hint">Portas a mais que o programa usa, separadas por vírgula. As portas das opções (como QUERY_PORT) abrem sozinhas.</span></label>` : ""}</div>` : ""}
         <div class="sect"><b>Limites</b><div class="three">
           <label>Memória (MB)<input type="number" id="wMem" min="0" step="256" value="${t.limits.memory || 1024}">${total ? `<span class="hint">A máquina tem ${bytes(total)}</span>` : ""}</label>
           <label>Processador (núcleos)<input type="number" id="wCpu" min="0" step="0.5" value="${t.limits.cpu || 0}"><span class="hint">0 = sem limite</span></label>
@@ -462,7 +529,7 @@ async function newServerWizard(nodeId) {
     box.querySelector("[data-create]").onclick = guard(async () => {
       const btn = box.querySelector("[data-create]"); btn.disabled = true;
       try {
-        const spec = { template: t.id, name: $("#wName").value, vars: readVars($("#wiz")), image: $("#wImage") ? $("#wImage").value : undefined, startup: $("#wStartup") ? $("#wStartup").value : undefined,
+        const spec = { template: t.id, name: $("#wName").value, vars: readVars($("#wiz")), image: $("#wImage") ? $("#wImage").value : undefined, startup: $("#wStartup") ? $("#wStartup").value : undefined, extraPorts: $("#wExtra") ? $("#wExtra").value : undefined,
           ports: $$("[data-wport]").map((el) => Number(el.value) || 0), limits: { memory: Number($("#wMem").value) || 0, cpu: Number($("#wCpu").value) || 0, disk: Number($("#wDisk").value) || 0 }, autostart: $("#wAuto").checked };
         const s = await call("server-create", { node: nodeId, spec });
         closeModal();
@@ -542,6 +609,7 @@ document.addEventListener("click", guard(async (e) => {
     if ($("#sImage")) patch.image = $("#sImage").value;
     if ($("#sImageCustom")) patch.image = $("#sImageCustom").value;
     if ($("#sStartup")) patch.startup = $("#sStartup").value;
+    if ($("#sExtra")) patch.extraPorts = $("#sExtra").value;
     S.srv = await call("server-update", { node: S.view.node, server: s.id, patch });
     toast("Configurações salvas", "ok"); renderSide(); return renderMain();
   }

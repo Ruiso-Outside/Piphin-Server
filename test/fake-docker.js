@@ -35,6 +35,13 @@ function run(c) {
   emit(c, "start");
   const bind = (c.HostConfig.Binds || [])[0];
   const host = bind ? bind.slice(0, bind.lastIndexOf(":")) : null;
+  if (cmd.includes("/mnt/install/install.sh")) { // instalação de egg: confere o script e a pasta montados
+    const bindScript = (c.HostConfig.Binds || []).find((b) => b.endsWith(":/mnt/install/install.sh:ro"));
+    const scriptFile = bindScript ? bindScript.slice(0, bindScript.indexOf(":/mnt/install")) : "";
+    out(c, `[fake] egg: ${cmd} · ${scriptFile && fs.existsSync(scriptFile) ? fs.readFileSync(scriptFile, "utf8").split("\n")[0] : "sem script"}\n`);
+    setTimeout(() => { if (host) fs.writeFileSync(path.join(host, "server.jar"), "fake"); exit(c, 0); }, 300);
+    return;
+  }
   if (cmd.includes("/mnt/server")) { // instalação
     out(c, "[fake] instalando...\n");
     setTimeout(() => {
@@ -45,6 +52,8 @@ function run(c) {
     return;
   }
   out(c, `[fake] iniciando: ${cmd.slice(0, 120)}\n`);
+  const startupEnv = (c.Config.Env || []).find((e) => e.startsWith("STARTUP="));
+  if (startupEnv) out(c, `[fake] ${startupEnv} cmd=${c.Config.Cmd ? "sim" : "nao"} usuario=${c.Config.User} portas=${Object.keys(c.Config.ExposedPorts || {}).sort().join(",")}\n`);
   setTimeout(() => out(c, "[Server] Done (1.234s)! For help, type \"help\"\n"), 800);
   let n = 0; c.timer = setInterval(() => out(c, `[Server] tick ${++n}\n`), 5000);
 }

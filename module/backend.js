@@ -215,6 +215,67 @@ exports.activate = (ctx) => {
   ctx.handle("backup-delete", ({ node: id, server, backup }) => api(id, "DELETE", `/api/servers/${sid(server)}/backups/${sid(backup)}`));
   ctx.handle("backup-download", ({ node: id, server, backup }) => download(id, `/api/servers/${sid(server)}/backups/${sid(backup)}/download`, `backup-${backup}.tar.gz`));
 
+  // ---------------------------------------------------------------- eggs do Pterodactyl
+  const CATALOG = path.join(ctx.dataDir, "egg-catalog.json"), DAY = 24 * 3600 * 1000;
+  const decode = (s) => String(s).replace(/&#(\d+);/g, (a, n) => String.fromCharCode(n)).replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  // a lista de https://eggs.pterodactyl.io: cada egg tem o link da página, o nome, a descrição e o botão de baixar
+  function parseSite(html) {
+    const out = new Map(), re = /data-download="(https:\/\/raw\.githubusercontent\.com\/[^"]+\.json)"[^>]*?aria-label="Download ([^"]*)"/g;
+    for (let m; (m = re.exec(html)); ) {
+      const at = html.lastIndexOf('href="/egg/', m.index); if (at < 0) continue;
+      const slug = html.slice(at + 11, html.indexOf('"', at + 11)), name = decode(m[2]);
+      const texts = [...html.slice(at, m.index).matchAll(/>([^<>]{2,})</g)].map((x) => decode(x[1]).trim()).filter((t) => t && t !== name && !/^[\d\s,.:/-]+$/.test(t)); // a coluna de portas não é descrição
+      const description = texts.reduce((a, b) => (b.length > a.length ? b : a), "");
+      out.set(slug, { slug, name, description, group: slug.split("-")[0], url: m[1] });
+    }
+    return [...out.values()];
+  }
+  // reserva: os repositórios dos eggs no GitHub (sem descrição)
+  async function fromGithub() {
+    const out = [];
+    for (const [repo, group] of [["game-eggs", "games"], ["application-eggs", "applications"], ["generic-eggs", "generic"]]) {
+      const r = await fetch(`https://api.github.com/repos/pterodactyl/${repo}/git/trees/main?recursive=1`, { headers: { "User-Agent": "Piphin-Hub", Accept: "application/vnd.github+json" } });
+      if (!r.ok) throw new Error(`GitHub ${r.status}`);
+      for (const x of (await r.json()).tree || []) {
+        if (!/(^|\/)egg-[^/]*\.json$/.test(x.path)) continue;
+        const parts = x.path.split("/").slice(0, -1), last = parts[parts.length - 1] || repo;
+        const name = parts.map((p) => p.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())).join(": ");
+        out.push({ slug: `${group}-${last.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, name, description: "", group, url: `https://raw.githubusercontent.com/pterodactyl/${repo}/main/${x.path.split("/").map(encodeURIComponent).join("/")}` });
+      }
+    }
+    return out;
+  }
+  ctx.handle("egg-catalog", async () => {
+    const cached = readJson(CATALOG, null);
+    if (cached && Date.now() - cached.at < DAY && cached.list.length) return cached.list;
+    try {
+      let list = [];
+      try { const r = await fetch("https://eggs.pterodactyl.io/", { headers: { "User-Agent": "Piphin-Hub" } }); if (r.ok) list = parseSite(await r.text()); } catch { /* tenta o GitHub */ }
+      if (list.length < 50) list = await fromGithub();
+      fs.mkdirSync(ctx.dataDir, { recursive: true });
+      fs.writeFileSync(CATALOG, JSON.stringify({ at: Date.now(), list }));
+      return list;
+    } catch (e) {
+      if (cached && cached.list.length) return cached.list; // sem internet: usa a lista antiga
+      throw new Error("Não deu para baixar a lista de eggs: confira a internet deste PC");
+    }
+  });
+  ctx.handle("egg-import", async ({ node: id, slug, url }) => {
+    const u = new URL(String(url));
+    if (u.protocol !== "https:" || u.hostname !== "raw.githubusercontent.com") throw new Error("Endereço de egg inválido");
+    const r = await fetch(u, { headers: { "User-Agent": "Piphin-Hub" } });
+    if (!r.ok) throw new Error(`Não deu para baixar o egg (erro ${r.status})`);
+    return api(id, "POST", "/api/eggs", { egg: await r.json(), slug }, { timeout: 30000 });
+  });
+  ctx.handle("egg-import-file", async ({ node: id }) => {
+    const list = await ctx.host.openDialog({ title: "Importar egg", properties: ["openFile"], filters: [{ name: "Egg (JSON)", extensions: ["json"] }] });
+    if (!list || !list.length) return null;
+    if (fs.statSync(list[0]).size > 3 * 1024 * 1024) throw new Error("Esse arquivo não é um egg do Pterodactyl");
+    let egg; try { egg = JSON.parse(fs.readFileSync(list[0], "utf8").replace(/^\uFEFF/, "")); } catch { throw new Error("Esse arquivo não é um egg do Pterodactyl"); }
+    return api(id, "POST", "/api/eggs", { egg }, { timeout: 30000 });
+  });
+  ctx.handle("egg-delete", ({ node: id, egg }) => api(id, "DELETE", `/api/eggs/${sid(egg)}`));
+
   // ---------------------------------------------------------------- ferramentas da IA (module.json "tools")
   const findServer = async (name) => {
     const all = [];

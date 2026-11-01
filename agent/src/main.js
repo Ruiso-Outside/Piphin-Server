@@ -13,6 +13,7 @@ const dgram = require("dgram");
 const crypto = require("crypto");
 const docker = require("./docker");
 const templates = require("./templates");
+const eggs = require("./eggs");
 const Servers = require("./servers");
 const Backups = require("./backups");
 const schedules = require("./schedules");
@@ -60,6 +61,7 @@ if (cmd && cmd !== "run") {
 }
 
 // ---------------------------------------------------------------- serviço
+templates.setEggs(eggs.load(cfg));
 const servers = new Servers(cfg, log);
 const backups = new Backups(servers);
 const certPem = fs.readFileSync(cfg.cert, "utf8");
@@ -113,6 +115,20 @@ route("PATCH", "/api/node", true, async (req) => {
 route("GET", "/api/node/stats", true, () => host.stats(cfg.dataDir));
 route("DELETE", "/api/clients/:cid", true, (req, res, p) => ({ ok: auth.revoke(p.cid) }));
 route("GET", "/api/templates", true, () => templates.all().map(templates.pub));
+// eggs do Pterodactyl importados pelo Hub: viram modelos desta máquina
+route("POST", "/api/eggs", true, async (req) => {
+  const b = await readJson(req, 3 * 1024 * 1024);
+  const t = eggs.convert(b.egg, { slug: b.slug });
+  eggs.save(cfg, t); templates.addEgg(t);
+  log("egg importado:", t.id);
+  return templates.pub(t);
+});
+route("DELETE", "/api/eggs/:eid", true, (req, res, p) => {
+  const inUse = [...servers.map.values()].filter((s) => s.template === p.eid);
+  if (inUse.length) throw Object.assign(new Error(`Este egg está em uso por: ${inUse.map((s) => s.name).join(", ")}`), { status: 409 });
+  eggs.remove(cfg, p.eid); templates.dropEgg(p.eid);
+  return { ok: true };
+});
 route("GET", "/api/cron/next", true, (req, res, p, q) => { try { return { next: schedules.next(q.get("expr")) }; } catch (e) { throw Object.assign(e, { status: 400 }); } });
 route("GET", "/api/events", true, (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
