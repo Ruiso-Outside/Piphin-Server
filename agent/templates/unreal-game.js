@@ -12,13 +12,15 @@ if [ -z "$L" ]; then L=$(ls ./*.sh 2>/dev/null | grep -v '/Engine' | head -n1); 
 chmod +x "$L" ./Engine/Binaries/Linux/* ./*/Binaries/Linux/* 2>/dev/null
 # caminho de mapa digitado sem a barra do começo (Game/...): sem ela a Unreal acha que é o endereço de outro servidor
 case "$MAP" in ""|/*|*://*) ;; */*) MAP="/$MAP" ;; esac
+# os milhares de "LogLinker: Verbose" de todo jogo empacotado ficam fora do console (avisos e erros continuam)
+QUIET="-LogCmds=LogLinker Warning"
 if [ "$MODE" = listen ]; then
   [ -n "$MAP" ] || { echo "Preencha o mapa nas opções do servidor: o jogo normal precisa saber qual mapa hospedar."; exit 1; }
   echo "Rodando $L sem tela, hospedando $MAP"
-  exec "$L" "$MAP?listen" -nullrhi -nosound -unattended -log -FullStdOutLogOutput -Port=$SERVER_PORT $EXTRA_ARGS
+  exec "$L" "$MAP?listen" -nullrhi -nosound -unattended -log -FullStdOutLogOutput "$QUIET" -Port=$SERVER_PORT $EXTRA_ARGS
 fi
 echo "Rodando o servidor dedicado $L"
-exec "$L" $MAP -log -FullStdOutLogOutput -unattended -Port=$SERVER_PORT $EXTRA_ARGS`,
+exec "$L" $MAP -log -FullStdOutLogOutput "$QUIET" -unattended -Port=$SERVER_PORT $EXTRA_ARGS`,
   stop: "SIGINT", done: "listening on port|Game Engine Initialized",
   ports: [{ name: "Jogo", container: "same", protocol: "udp", default: 7777 }],
   limits: { memory: 4096, cpu: 0, disk: 0 },
