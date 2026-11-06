@@ -328,6 +328,17 @@ const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now
     r = await api("POST", "/api/servers", { game: gid2, vars: { PIPHIN_EULA: "true" }, autostart: false });
     const esid = r.body.id;
     ok(r.status === 200 && r.body.egg && await until(async () => fs.existsSync(path.join(TMP, "data", "servers", esid, "data", "game", "versao.txt")), 15000), "jogo próprio com egg: instala o egg e extrai o pacote");
+    // trocar como o jogo roda: de um egg para o Jogo Unreal e de volta, mantendo os saves
+    const esdata = path.join(TMP, "data", "servers", esid, "data");
+    fs.mkdirSync(path.join(esdata, "game", "Saved"), { recursive: true }); fs.writeFileSync(path.join(esdata, "game", "Saved", "conta.sav"), "save");
+    ok((await api("POST", `/api/servers/${esid}/template`, { template: "minecraft-paper" })).status === 400, "não troca para um modelo comum");
+    r = await api("POST", `/api/servers/${esid}/template`, { template: "unreal-game", vars: { MAP: "/Game/X" } });
+    ok(r.status === 200 && r.body.template === "unreal-game" && !r.body.egg && r.body.vars.MAP === "/Game/X" && r.body.ports[0].protocol === "udp", "troca o egg pelo Jogo Unreal");
+    ok(await until(async () => (await api("GET", `/api/servers/${esid}`)).body.state === "offline", 15000) && fs.existsSync(path.join(esdata, "game", "Saved", "conta.sav")) && fs.existsSync(path.join(esdata, "game", "versao.txt")), "instala de novo e os saves continuam");
+    ok((await api("GET", "/api/games")).body.find((g) => g.id === gid2).template === "unreal-game", "o jogo passa a usar o modelo novo");
+    r = await api("POST", `/api/servers/${esid}/template`, { template: "egg-games-fica", vars: { PIPHIN_EULA: "true" } });
+    ok(r.status === 200 && r.body.egg && r.body.ports.length >= 2, "volta para o egg, com as portas das opções");
+    await until(async () => (await api("GET", `/api/servers/${esid}`)).body.state === "offline", 15000);
     await api("DELETE", `/api/servers/${esid}`); await api("DELETE", `/api/games/${gid2}`);
 
     console.log("identidade da máquina (impressão digital)");

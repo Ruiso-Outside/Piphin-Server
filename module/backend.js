@@ -245,6 +245,7 @@ exports.activate = (ctx) => {
     } finally { ctx.emit("transfer", { name, done: size, total: size, finished: true }); }
   });
   // extrair um pacote grande leva alguns minutos
+  ctx.handle("server-template", ({ node: id, server, template, vars }) => api(id, "POST", `/api/servers/${sid(server)}/template`, { template, vars }, { timeout: 30 * 60000 }));
   ctx.handle("server-game-update", ({ node: id, server, version }) => api(id, "POST", `/api/servers/${sid(server)}/game-update`, { version }, { timeout: 30 * 60000 }));
 
   ctx.handle("backups", ({ node: id, server }) => api(id, "GET", `/api/servers/${sid(server)}/backups`));

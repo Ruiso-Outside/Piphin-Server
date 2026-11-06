@@ -233,6 +233,7 @@ route("PATCH", "/api/games/:gid", true, async (req, res, p) => {
 });
 route("DELETE", "/api/games/:gid", true, (req, res, p) => { games.remove(p.gid, [...servers.map.values()].filter((s) => s.game === p.gid).map((s) => s.name)); return { ok: true }; });
 route("PUT", "/api/games/:gid/package", true, async (req, res, p, q) => { const v = await games.upload(p.gid, req, q.get("name")); log("jogo: versão enviada", p.gid, v.name, v.size); return v; });
+route("POST", "/api/servers/:id/template", true, async (req, res, p) => { const b = await readJson(req); log("servidor: modelo trocado", p.id, b.template); return servers.changeTemplate(p.id, b.template, b.vars || {}); });
 route("POST", "/api/servers/:id/game-update", true, async (req, res, p) => servers.updateGame(p.id, (await readJson(req)).version || null));
 
 route("GET", "/api/servers", true, () => servers.list());

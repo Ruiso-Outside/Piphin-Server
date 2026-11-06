@@ -414,6 +414,27 @@ echo "Pacote extraído."`;
   }
 
   // ---------------------------------------------------------------- mudar e apagar
+  // jogo próprio: troca o modelo (o Jogo Unreal ou um egg) e instala de novo por cima; a pasta do jogo e os saves ficam
+  async changeTemplate(id, tid, given = {}) {
+    const s = this.get(id), t = templates.get(tid);
+    if (!s.game) throw Object.assign(new Error("Só os servidores dos Meus jogos podem trocar de modelo"), { status: 400 });
+    if (!t || !(t.egg || t.id === "unreal-game")) throw Object.assign(new Error("Modelo desconhecido"), { status: 400 });
+    if (s.installState === "installing" || this.updatingGame.has(id)) throw new Error("Aguarde a instalação terminar");
+    const vars = templates.resolveVars(t, { ...s.vars, ...given });
+    const wasOn = this.r(id).state !== "offline";
+    if (wasOn) await this.stopContainer(s, false);
+    const main = (s.ports || [])[0], p = (t.ports || [])[0] || { name: "Jogo", protocol: "udp" };
+    Object.assign(s, { template: t.id, templateName: t.name, vars, image: t.image, startup: t.startup, stop: t.stop || "SIGTERM", done: t.done || null,
+      mount: t.mount || "/home/container", user: t.user || "1000:1000", chown: t.chown || "1000:1000", env: t.env || {}, envFromVars: t.envFromVars || null, gameDir: t.gameDir || "game" });
+    s.ports = main ? [{ name: p.name, container: main.host, host: main.host, protocol: p.protocol || "tcp" }] : [];
+    if (t.egg) { s.egg = true; s.extraPorts = s.extraPorts || []; this.syncEggPorts(s, true); } else { delete s.egg; delete s.extraPorts; }
+    this.save(s);
+    this.system(id, `Agora o jogo roda com: ${t.name}.`);
+    this.games.update(s.game, { template: t.id }); // os próximos servidores do jogo também
+    await this.install(id, { reinstall: true });
+    if (wasOn) await this.power(id, "start").catch((e) => this.system(id, e.message));
+    return this.view(s);
+  }
   async update(id, patch) {
     const s = this.get(id), t = templates.get(s.template);
     if (patch.name != null) s.name = String(patch.name).trim().slice(0, 60) || s.name;

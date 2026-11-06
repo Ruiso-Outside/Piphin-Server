@@ -116,8 +116,10 @@ const paintGameSect = guard(async () => {
       ${newest && newest.id !== s.gameVersion ? `<button class="btn violet" data-game-apply="${esc(newest.id)}"><i class="i i-circle-arrow-up"></i>Atualizar para a mais nova</button>` : ""}</div>
     <table class="m-table"><tbody>${g.versions.map((v) => `<tr><td><span data-noi18n>${esc(when(v.at))}</span>${v.id === s.gameVersion ? ` <span class="badge">Em uso</span>` : ""}${v === newest ? ` <span class="badge">Mais nova</span>` : ""}</td><td class="num">${bytes(v.size)}</td>
       <td class="num">${v.id === s.gameVersion ? "" : `<button class="btn sm ghost" data-game-apply="${esc(v.id)}">${v === newest ? "Usar esta" : "Voltar para esta"}</button>`}</td></tr>`).join("")}</tbody></table>
-    ${cur ? "" : `<p class="faint" style="margin:8px 0 0">A versão instalada não está mais guardada na máquina.</p>`}`;
+    ${cur ? "" : `<p class="faint" style="margin:8px 0 0">A versão instalada não está mais guardada na máquina.</p>`}
+    <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px"><span class="faint">Como o jogo roda:</span><b data-noi18n>${esc(tplName(S.templates[nodeId] || [], s.template))}</b><span class="grow"></span><button class="btn sm" data-game-tpl><i class="i i-refresh-cw"></i>Trocar</button></div>`;
   el.onclick = guard(async (ev) => {
+    if (ev.target.closest("[data-game-tpl]")) return changeGameTemplate(nodeId, serverId);
     if (ev.target.closest("[data-game-send-here]")) { await sendGameVersion(nodeId, g); S.srv = await call("server-get", { node: nodeId, server: serverId }); return paintGameSect(); }
     const ap = ev.target.closest("[data-game-apply]"); if (!ap) return;
     const on = S.srv.state !== "offline";
@@ -128,3 +130,26 @@ const paintGameSect = guard(async () => {
     paintGameSect();
   });
 });
+
+// trocar como o jogo de um servidor roda: escolhe o modelo, preenche as opções dele e o servidor instala de novo por cima
+async function changeGameTemplate(nodeId, serverId) {
+  delete S.templates[nodeId];
+  const tpls = await templatesOf(nodeId), s = S.srv;
+  const opts = tpls.filter((t) => (t.egg || t.id === UNREAL_TEMPLATE) && t.id !== s.template);
+  if (!opts.length) { toast("Importe um egg pelos Meus jogos (Adicionar jogo) para ter outra opção", "info"); return; }
+  const form = (t) => `<div class="form" id="tplVars">${t.vars.map((v) => varInput(v, s.vars[v.key] ?? v.default, "t")).join("")}</div>`;
+  openModal(`<h3>Como o jogo roda</h3><div class="form"><label>Modelo<select id="tplPick">${opts.map((t) => `<option value="${esc(t.id)}" data-noi18n>${esc(t.name)}${t.egg ? " (egg)" : ""}</option>`).join("")}</select></label>
+    <p class="faint" style="margin:0">O servidor desliga e instala de novo com o modelo escolhido. Os arquivos do jogo e os saves continuam.</p><div id="tplForm"></div></div>
+    <div class="modal-actions"><button class="btn" data-x>Cancelar</button><button class="btn violet" data-tpl-ok><i class="i i-refresh-cw"></i>Trocar</button></div>`, "mid");
+  const pick = () => { $("#tplForm").innerHTML = form(opts.find((t) => t.id === $("#tplPick").value)); };
+  $("#tplPick").onchange = pick; pick();
+  box.querySelector("[data-x]").onclick = closeModal;
+  box.querySelector("[data-tpl-ok]").onclick = guard(async () => {
+    const btn = box.querySelector("[data-tpl-ok]"); btn.disabled = true; btn.innerHTML = `<span class="spin"></span>`;
+    try {
+      S.srv = await call("server-template", { node: nodeId, server: serverId, template: $("#tplPick").value, vars: readVars($("#tplForm")) });
+      closeModal(); toast("Modelo trocado: instalando de novo", "ok");
+      await loadServers(nodeId); S.tab = "console"; renderSide(); renderMain();
+    } finally { btn.disabled = false; btn.innerHTML = `<i class="i i-refresh-cw"></i>Trocar`; }
+  });
+}

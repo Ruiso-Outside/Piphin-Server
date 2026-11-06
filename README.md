@@ -50,6 +50,8 @@ Como o jogo roda:
 - **Jogo Unreal**: roda o `<Projeto>Server.sh` do pacote (build de servidor dedicado). Sem ele, roda o jogo normal sem tela (`-nullrhi`) hospedando o mapa escolhido, com `?listen`. A porta vai em `-Port` e há um campo para opções extras.
 - **Um egg**: para jogos com um jeito próprio de ligar (por exemplo, vários processos ao mesmo tempo). Importe o `.json` do egg no formulário do jogo e envie o pacote.
 
+Na aba Configurações de um servidor de jogo próprio, **Como o jogo roda > Trocar** muda o modelo (por exemplo, do Jogo Unreal para um egg) sem apagar o servidor. Ele instala de novo por cima, e os arquivos do jogo e os saves continuam.
+
 Os pacotes ficam em `/var/lib/piphin-agent/games`. A extração roda num contêiner, sem rede.
 
 ## Eggs do Pterodactyl
