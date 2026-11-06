@@ -212,3 +212,5 @@ h3.h .i { color: var(--sv-2); }
 .card { min-width: 0; overflow-wrap: anywhere; }
 .m-table td, .m-table th { overflow-wrap: normal; }
 .sensor > * { min-width: 0; overflow-wrap: anywhere; }
+.egg-item .tpl b + br + span .badge { margin-left: 4px; }
+.game-card .tpl { padding-right: 76px; }

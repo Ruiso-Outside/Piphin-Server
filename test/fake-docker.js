@@ -35,6 +35,19 @@ function run(c) {
   emit(c, "start");
   const bind = (c.HostConfig.Binds || [])[0];
   const host = bind ? bind.slice(0, bind.lastIndexOf(":")) : null;
+  const pkgBind = (c.HostConfig.Binds || []).find((b) => /:\/pkg\/[^:]+:ro$/.test(b));
+  if (pkgBind) { // extrair o pacote de um jogo próprio
+    const env = Object.fromEntries((c.Config.Env || []).map((e) => [e.slice(0, e.indexOf("=")), e.slice(e.indexOf("=") + 1)]));
+    const pkgFile = pkgBind.slice(0, pkgBind.indexOf(":/pkg/"));
+    const dest = path.join(host, env.GAME_DIR || "game");
+    fs.mkdirSync(dest, { recursive: true });
+    out(c, `[fake] extraindo ${env.PKG} em ${env.GAME_DIR}\n`);
+    require("child_process").execFile(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", pkgFile, "-C", dest], (err) => {
+      if (err) out(c, `[fake] erro: ${err.message}\n`); else out(c, "Pacote extraído.\n");
+      exit(c, err ? 1 : 0);
+    });
+    return;
+  }
   if (cmd.includes("/mnt/install/install.sh")) { // instalação de egg: confere o script e a pasta montados
     const bindScript = (c.HostConfig.Binds || []).find((b) => b.endsWith(":/mnt/install/install.sh:ro"));
     const scriptFile = bindScript ? bindScript.slice(0, bindScript.indexOf(":/mnt/install")) : "";

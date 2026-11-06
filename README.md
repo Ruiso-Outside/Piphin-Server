@@ -37,6 +37,21 @@ São duas partes:
 
 Cada modelo é um arquivo em `agent/templates/` (variáveis, imagem, script de instalação, comando de início, como parar e a frase que indica que ligou). A versão do Java do Minecraft é escolhida sozinha pela versão do jogo (8, 17, 21 ou 25).
 
+## Meus jogos
+
+Para os seus próprios jogos, como um build Linux da Unreal Engine. No assistente de novo servidor, a aba **Meus jogos**:
+
+1. **Adicionar jogo**: o nome, como o jogo roda e o pacote do PC (`.tar.gz`, `.tar` ou `.zip`). O pacote vai direto para a máquina, com o hash conferido.
+2. Clique no jogo para criar quantos servidores quiser. Cada um recebe o pacote extraído na pasta `game`.
+3. Para atualizar, envie a versão nova (no cartão do jogo ou na aba Configurações do servidor) e escolha atualizar os servidores. Os ligados desligam, recebem a versão e ligam de novo. A extração é por cima, então os saves e as configurações que o jogo criou continuam. Também dá para voltar para uma das versões guardadas (as 3 mais novas).
+
+Como o jogo roda:
+
+- **Jogo Unreal**: roda o `<Projeto>Server.sh` do pacote (build de servidor dedicado). Sem ele, roda o jogo normal sem tela (`-nullrhi`) hospedando o mapa escolhido, com `?listen`. A porta vai em `-Port` e há um campo para opções extras.
+- **Um egg**: para jogos com um jeito próprio de ligar (por exemplo, vários processos ao mesmo tempo). Importe o `.json` do egg no formulário do jogo e envie o pacote.
+
+Os pacotes ficam em `/var/lib/piphin-agent/games`. A extração roda num contêiner, sem rede.
+
 ## Eggs do Pterodactyl
 
 No assistente de novo servidor, a aba **Eggs** mostra o catálogo de [eggs.pterodactyl.io](https://eggs.pterodactyl.io/) (mais de 300 jogos e aplicativos), com busca. Ao clicar num egg, o Hub baixa o arquivo e o agente guarda como um modelo da máquina. Também dá para importar um arquivo `.json` de egg de qualquer lugar.
@@ -68,7 +83,7 @@ O instalador:
 4. libera as portas 8443/tcp (painel) e 8444/udp (descoberta) no ufw, se ele estiver ligado
 5. mostra o código de pareamento
 
-Depois, no Hub, abra o Piphin Server, clique em **Procurar na rede** e digite o código. Para desinstalar: `sudo bash install.sh --uninstall`.
+Depois, no Hub, abra o Piphin Server, clique em **Procurar na rede** e digite o código. Se o roteador der outro IP à máquina, o Hub a acha de novo sozinho na rede, pelo certificado. Para desinstalar: `sudo bash install.sh --uninstall`.
 
 Para atualizar o agente, rode o mesmo comando de instalação de novo: os servidores continuam ligados, e a configuração e o pareamento são mantidos.
 
@@ -95,10 +110,11 @@ sudo piphin-agent revoke ID # tira o acesso de um Hub
 ## Estrutura
 
 - `agent/src/`: `main.js` (linha de comando, API HTTPS, eventos ao vivo, descoberta), `system.js` (monitoramento e controle da máquina), `terminal.js` (terminal num pseudo-terminal, pelo comando `script`), `docker.js` (API do Docker pelo socket), `servers.js` (ciclo de vida), `files.js`, `backups.js`, `schedules.js`, `host.js`, `auth.js`, `templates.js`, `eggs.js` (eggs do Pterodactyl)
-- `agent/templates/`: os modelos
+- `agent/templates/`: os modelos (`unreal-game.js` é o dos Meus jogos)
+- `agent/src/games.js`: os Meus jogos (pacotes e versões)
 - `agent/install.sh`: o instalador
 - `module/`: `module.json`, `backend.js` (conversa com os agentes) e `pinned.js` (conexão presa à impressão digital)
-- `web/`: a tela (`js/app.js`, `js/machine.js` e `vendor/` com o [xterm.js](https://xtermjs.org), licença MIT)
+- `web/`: a tela (`js/app.js`, `js/machine.js`, `js/games.js` e `vendor/` com o [xterm.js](https://xtermjs.org), licença MIT)
 - `test/`: `fake-docker.js` (Docker falso para testar no Windows), `agent-test.js` (teste completo do agente), `fake-system.js` e `fake-shell.js` (`/proc`, `/sys`, comandos do sistema e shell de mentira), `dev-env.js` (agente local para testar a tela)
 - `scripts/`: `make-module.js` (gera `dist/piphin-module-server-<versão>.zip`), `make-agent.js` (gera `dist/piphin-agent.tar.gz` e `dist/install.sh`), `make-icons.js`, `make-icon.js`
 

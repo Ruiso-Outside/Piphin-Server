@@ -1,6 +1,6 @@
 {
   "name": "piphin-agent",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Piphin Agent: roda no Ubuntu Server e deixa o Piphin Hub criar e controlar servidores de jogos, sites, bots e bancos de dados com Docker",
   "main": "src/main.js",
   "bin": { "piphin-agent": "src/main.js" },

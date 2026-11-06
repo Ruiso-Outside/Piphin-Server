@@ -269,6 +269,67 @@ const until = async (fn, ms = 15000) => { const t0 = Date.now(); while (Date.now
     ok(await until(async () => !(await api("GET", "/api/terminals")).body.some((t) => t.id === tid), 3000), "exit fecha a sessão");
     ok((await api("POST", "/api/terminals/ffff/resize", { cols: 80, rows: 20 })).body.ok === false, "sessão que não existe");
 
+    console.log("meus jogos");
+    // dois pacotes de mentira com a cara de um build Linux da Unreal
+    const TAR = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
+    const mkPkg = (ver, file) => {
+      const d = fs.mkdtempSync(path.join(TMP, "pkg-"));
+      fs.mkdirSync(path.join(d, "Engine", "Binaries", "Linux"), { recursive: true });
+      fs.writeFileSync(path.join(d, "Engine", "Binaries", "Linux", "UnrealGame"), "bin");
+      fs.writeFileSync(path.join(d, "MEUJOGO.sh"), "#!/bin/sh\n");
+      fs.writeFileSync(path.join(d, "versao.txt"), ver);
+      const out = path.join(TMP, file);
+      execFileSync(TAR, ["-czf", out, "-C", d, "."]);
+      return out;
+    };
+    const putPkg = (gid, file, name) => api("PUT", `/api/games/${gid}/package?name=${encodeURIComponent(name)}`, fs.readFileSync(file), { headers: { "Content-Type": "application/octet-stream" } });
+    ok((await api("POST", "/api/games", { name: "Meu Jogo", template: "nao-existe" })).status === 400, "jogo com modelo que não existe é recusado");
+    r = await api("POST", "/api/games", { name: "Meu Jogo", template: "unreal-game" });
+    const gid = r.body.id;
+    ok(r.status === 200 && gid && r.body.versions.length === 0, "cria o jogo");
+    ok((await api("GET", "/api/templates")).body.find((t) => t.id === "unreal-game").hidden === true, "o modelo do Unreal fica escondido dos outros");
+    ok((await api("POST", "/api/servers", { game: gid })).status >= 400, "sem pacote não cria servidor");
+    ok((await putPkg(gid, mkPkg("1", "a.tar.gz"), "../../x.exe")).status === 400, "só aceita pacote .tar.gz, .tar ou .zip");
+    r = await putPkg(gid, mkPkg("1", "v1.tar.gz"), "MeuJogo-Linux.tar.gz");
+    ok(r.status === 200 && r.body.size > 0 && r.body.sha256.length === 64, "recebe o pacote e guarda o hash");
+    const v1 = r.body.id;
+    r = await api("POST", "/api/servers", { game: gid, ports: [27500], vars: { MAP: "/Game/Maps/Teste" }, autostart: false });
+    ok(r.status === 200 && r.body.game === gid && r.body.name === "Meu Jogo" && r.body.ports[0].protocol === "udp", "cria o servidor a partir do jogo");
+    const gsid = r.body.id, gdata = path.join(TMP, "data", "servers", gsid, "data");
+    ok(await until(async () => (await api("GET", `/api/servers/${gsid}`)).body.state === "offline" && fs.existsSync(path.join(gdata, "game", "versao.txt")), 15000), "extrai o pacote na pasta do jogo");
+    ok((await api("GET", `/api/servers/${gsid}`)).body.gameVersion === v1, "guarda a versão instalada");
+    // o jogo criou saves; a versão nova não pode apagar
+    fs.mkdirSync(path.join(gdata, "game", "MEUJOGO", "Saved"), { recursive: true });
+    fs.writeFileSync(path.join(gdata, "game", "MEUJOGO", "Saved", "conta.sav"), "save");
+    r = await putPkg(gid, mkPkg("2", "v2.tar.gz"), "MeuJogo-Linux.tar.gz");
+    const v2 = r.body.id;
+    r = await api("GET", "/api/games");
+    ok(r.body[0].versions[0].id === v2 && r.body[0].servers[0].version === v1, "a lista mostra a versão nova e a que o servidor usa");
+    await api("POST", `/api/servers/${gsid}/power`, { action: "start" });
+    await until(async () => (await api("GET", `/api/servers/${gsid}`)).body.state !== "offline", 8000);
+    r = await api("POST", `/api/servers/${gsid}/game-update`, {});
+    ok(r.status === 200 && r.body.gameVersion === v2 && fs.readFileSync(path.join(gdata, "game", "versao.txt"), "utf8") === "2", "atualiza o jogo do servidor");
+    ok(fs.existsSync(path.join(gdata, "game", "MEUJOGO", "Saved", "conta.sav")), "os saves continuam depois de atualizar");
+    ok(await until(async () => (await api("GET", `/api/servers/${gsid}`)).body.state !== "offline", 8000), "estava ligado: liga de novo depois de atualizar");
+    r = await api("POST", `/api/servers/${gsid}/game-update`, { version: v1 });
+    ok(r.body.gameVersion === v1 && fs.readFileSync(path.join(gdata, "game", "versao.txt"), "utf8") === "1", "volta para uma versão anterior");
+    const con2 = (await api("GET", `/api/servers/${gsid}/console`)).body.map((l) => l.s).join("\n");
+    ok(/MAP=|iniciando: \/bin\/sh -c cd \/home\/container\/game/.test(con2), "liga com o executável do pacote");
+    for (let i = 0; i < 3; i++) await putPkg(gid, mkPkg("x" + i, `x${i}.tar.gz`), "MeuJogo-Linux.tar.gz");
+    r = await api("GET", "/api/games");
+    ok(r.body[0].versions.length === 3 && fs.readdirSync(path.join(TMP, "data", "games", gid)).filter((f) => f.endsWith(".tar.gz")).length === 3, "guarda só as 3 versões mais novas");
+    ok((await api("DELETE", `/api/games/${gid}`)).status === 409, "jogo em uso não pode ser apagado");
+    await api("POST", `/api/servers/${gsid}/power`, { action: "kill" });
+    ok((await api("DELETE", `/api/servers/${gsid}`)).status === 200 && (await api("DELETE", `/api/games/${gid}`)).status === 200 && !fs.existsSync(path.join(TMP, "data", "games", gid)), "apaga o servidor e depois o jogo, com os pacotes");
+    // com um egg (jogo com um jeito próprio de ligar): o pacote vai para a pasta game, junto do que o script do egg criou
+    r = await api("POST", "/api/games", { name: "Jogo do Egg", template: "egg-games-fica" });
+    const gid2 = r.body.id;
+    await putPkg(gid2, mkPkg("egg", "e.tar.gz"), "Jogo.tar.gz");
+    r = await api("POST", "/api/servers", { game: gid2, vars: { PIPHIN_EULA: "true" }, autostart: false });
+    const esid = r.body.id;
+    ok(r.status === 200 && r.body.egg && await until(async () => fs.existsSync(path.join(TMP, "data", "servers", esid, "data", "game", "versao.txt")), 15000), "jogo próprio com egg: instala o egg e extrai o pacote");
+    await api("DELETE", `/api/servers/${esid}`); await api("DELETE", `/api/games/${gid2}`);
+
     console.log("identidade da máquina (impressão digital)");
     const { PinnedAgent } = require("../module/pinned");
     const pinned = (port, fp) => new Promise((resolve) => {

@@ -72,7 +72,7 @@ function convert(egg, { slug } = {}) {
     id: `egg-${slugOf(slug || name) || "sem-nome"}`, order: 200, egg: true, name, category: "eggs", icon: "egg", author: String(egg.author || "").slice(0, 100),
     description: String(egg.description || "").replace(/\s+/g, " ").trim().slice(0, 300),
     image: images[0].image, images, editableStartup: true, startup: String(egg.startup).trim(), stop: stopOf(egg.config && egg.config.stop), done: doneOf(egg.config && egg.config.startup),
-    mount: "/home/container", user: "1000:1000", chown: "1000:1000",
+    mount: "/home/container", user: "1000:1000", chown: "1000:1000", gameDir: "game",
     ports: [{ name: "Principal", container: "same", protocol: "both", default: /minecraft|paper|spigot|forge|fabric/.test(hay) ? 25565 : slug && /^applications-/.test(slug) ? 8080 : 27015 }],
     limits: { memory: 4096, cpu: 0, disk: 0 }, vars, eula,
     configFiles: parseMaybe(egg.config && egg.config.files, {}) || {},

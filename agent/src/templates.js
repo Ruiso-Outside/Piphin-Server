@@ -16,7 +16,7 @@ const dropEgg = (id) => { eggs = eggs.filter((x) => x.id !== id); };
 const get = (id) => all().find((t) => t.id === id) || null;
 
 // o que vai para o painel (sem os scripts)
-const pub = (t) => ({ id: t.id, egg: !!t.egg, author: t.author || "", name: t.name, category: t.category, description: t.description, icon: t.icon, image: t.image, images: t.images || null,
+const pub = (t) => ({ id: t.id, egg: !!t.egg, author: t.author || "", hidden: !!t.hidden, name: t.name, category: t.category, description: t.description, icon: t.icon, image: t.image, images: t.images || null,
   ports: (t.ports || []).map((p) => ({ name: p.name, protocol: p.protocol || "tcp", default: p.default || (typeof p.container === "number" ? p.container : 0) })),
   vars: (t.vars || []).filter((v) => !v.hidden).map(({ key, name, description, type, default: d, options, required, min, max }) => ({ key, name, description, type: type || "text", default: d ?? "", options, required: !!required, min, max })),
   limits: t.limits || {}, editableStartup: !!t.editableStartup, startup: t.editableStartup ? t.startup : undefined, notes: t.notes || "" });

@@ -23,6 +23,8 @@ class Servers extends EventEmitter {
     fs.mkdirSync(this.root, { recursive: true });
     this.map = new Map();      // id -> config salva
     this.rt = new Map();       // id -> { state, lines[], con, stopping, crashes[], started }
+    this.games = null;         // Meus jogos (main.js liga)
+    this.updatingGame = new Set();
     for (const id of fs.readdirSync(this.root)) {
       const f = path.join(this.root, id, "server.json");
       try { this.map.set(id, JSON.parse(fs.readFileSync(f, "utf8"))); } catch { /* pasta quebrada */ }
@@ -59,7 +61,7 @@ class Servers extends EventEmitter {
     return { id: s.id, name: s.name, template: s.template, templateName: s.templateName, icon: s.icon, category: s.category, image: s.image,
       state: s.installState === "installing" ? "installing" : s.installState === "failed" ? "install_failed" : r.state,
       ports: s.ports, limits: s.limits, autostart: s.autostart, autoRestart: s.autoRestart, vars: s.vars, startup: s.startup, createdAt: s.createdAt,
-      egg: !!s.egg, extraPorts: s.extraPorts || [], stats: r.stats, disk: r.disk, startedAt: r.started || null, schedules: s.schedules || [], description: s.description || "" };
+      egg: !!s.egg, extraPorts: s.extraPorts || [], game: s.game || null, gameVersion: s.gameVersion || null, stats: r.stats, disk: r.disk, startedAt: r.started || null, schedules: s.schedules || [], description: s.description || "" };
   }
   list() { return [...this.map.values()].map((s) => this.view(s)).sort((a, b) => a.createdAt - b.createdAt); }
 
@@ -73,8 +75,10 @@ class Servers extends EventEmitter {
     throw new Error(`Não há porta livre perto da ${want}`);
   }
   async create(spec) {
-    const t = templates.get(spec.template);
-    if (!t) throw new Error("Modelo desconhecido");
+    const game = spec.game ? this.games.get(spec.game) : null;
+    if (game && !game.versions.length) throw new Error("Envie o pacote do jogo antes de criar o servidor");
+    const t = templates.get(game ? game.template : spec.template);
+    if (!t) throw new Error(game ? "O modelo deste jogo não existe mais nesta máquina: escolha outro nos Meus jogos" : "Modelo desconhecido");
     const name = String(spec.name || t.name).trim().slice(0, 60) || t.name;
     const vars = templates.resolveVars(t, spec.vars || {});
     const id = crypto.randomBytes(4).toString("hex");
@@ -107,6 +111,7 @@ class Servers extends EventEmitter {
       if (!/^[\w./:@-]+$/.test(s.image)) throw new Error("Imagem do Docker inválida");
     }
     if (t.egg) { s.egg = true; s.extraPorts = parseExtraPorts(spec.extraPorts); this.syncEggPorts(s, true); }
+    if (game) { s.game = game.id; s.gameDir = t.gameDir || "game"; s.icon = "joystick"; if (!spec.name) s.name = game.name; }
     fs.mkdirSync(this.dataDir(id), { recursive: true });
     this.map.set(id, s); this.save(s);
     this.emit("changed", { id });
@@ -146,6 +151,7 @@ class Servers extends EventEmitter {
           if (/^[\w./:@-]+$/.test(img) && img !== s.image) { s.image = img; this.system(id, `Imagem escolhida: ${img}`); await this.ensureImage(id, img); }
         }
       }
+      if (s.game) await this.extractGame(id, s);
       // sem script de instalação: a pasta ainda precisa ser do usuário do contêiner (ex.: 1000 no Redis)
       if ((!t || !t.install) && s.chown && process.platform === "linux") require("child_process").execFileSync("chown", ["-R", s.chown, this.dataDir(id)]);
       s.installState = "done"; this.save(s);
@@ -158,6 +164,54 @@ class Servers extends EventEmitter {
       this.emit("changed", { id });
       throw e;
     }
+  }
+  // jogo próprio: o pacote é extraído num contêiner (os links que o servidor tiver criado na pasta não levam para fora dela).
+  // Extrai por cima: arquivos novos entram, os que o jogo criou (saves, configurações) ficam
+  async extractGame(id, s, vid) {
+    const g = this.games.get(s.game), v = vid ? this.games.file(s.game, vid) : (g.versions[0] && this.games.file(s.game, g.versions[0].id));
+    if (!v) throw new Error("Este jogo ainda não tem um pacote enviado");
+    this.system(id, `Instalando ${g.name}: ${v.name} (${(v.size / 1048576).toFixed(0)} MB)...`);
+    const img = "alpine:3.20", name = `piphin-install-${id}`;
+    await this.ensureImage(id, img);
+    await docker.remove(name).catch(() => {});
+    const script = `set -e
+D="/mnt/server/$GAME_DIR"
+mkdir -p "$D"
+case "$PKG" in
+  *.zip) unzip -oq "/pkg/$PKG" -d "$D" ;;
+  *.tar) tar -xof "/pkg/$PKG" -C "$D" ;;
+  *) tar -xzof "/pkg/$PKG" -C "$D" ;;
+esac
+find "$D" -type f \\( -name "*.sh" -o -path "*/Binaries/Linux/*" \\) -exec chmod +x {} +
+chown -R ${s.chown || "1000:1000"} "$D"
+echo "Pacote extraído."`;
+    const c = await docker.create(name, {
+      Image: img, Cmd: ["/bin/sh", "-c", script], User: "0:0", Labels: { "piphin.install": id }, Env: [`PKG=${v.file}`, `GAME_DIR=${s.gameDir || "game"}`],
+      HostConfig: { Binds: [`${this.dataDir(id)}:/mnt/server`, `${v.path}:/pkg/${v.file}:ro`], NetworkMode: "none", Memory: 1024 * 1024 * 1024 },
+    });
+    const con = await docker.attach(c.Id, (txt) => this.print(id, txt, "install"));
+    await docker.start(c.Id);
+    const res = await docker.wait(c.Id);
+    con.close();
+    await docker.remove(c.Id).catch(() => {});
+    if (res.StatusCode !== 0) throw new Error(`Não deu para extrair o pacote (código ${res.StatusCode}). Confira se o arquivo não está corrompido.`);
+    s.gameVersion = v.id; this.save(s);
+    this.system(id, `${g.name} instalado: versão de ${new Date(v.at).toLocaleString("pt-BR")}.`);
+    this.emit("changed", { id });
+  }
+  // atualizar o jogo de um servidor: desliga, extrai a versão pedida (ou a mais nova) e liga de novo se estava ligado
+  async updateGame(id, vid) {
+    const s = this.get(id), r = this.r(id);
+    if (!s.game) throw new Error("Este servidor não é de um jogo próprio");
+    if (s.installState === "installing" || this.updatingGame.has(id)) throw new Error("Aguarde a instalação terminar");
+    this.updatingGame.add(id);
+    const wasOn = r.state !== "offline";
+    try {
+      if (wasOn) { this.system(id, "Desligando para atualizar o jogo..."); await this.stopContainer(s, false); }
+      await this.extractGame(id, s, vid);
+      if (wasOn) { s.wanted = "running"; this.save(s); await this.startContainer(s); }
+    } catch (e) { this.system(id, e.message); throw e; } finally { this.updatingGame.delete(id); }
+    return this.view(s);
   }
   // egg: o script roda como no Pterodactyl, em /mnt/install/install.sh com a pasta do servidor em /mnt/server
   async installEgg(id, s, t) {

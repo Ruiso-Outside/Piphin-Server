@@ -16,7 +16,7 @@ function uptime(sec) {
   return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`;
 }
 const STATE = { running: "Rodando", starting: "Iniciando", stopping: "Parando", offline: "Desligado", installing: "Instalando", install_failed: "Instalação falhou" };
-const CATS = [["jogos", "Jogos", "gamepad-2"], ["bots", "Bots", "bot"], ["sites", "Sites e apps", "globe"], ["bancos", "Bancos de dados", "database"], ["outros", "Outros", "box"], ["eggs", "Eggs", "egg"]];
+const CATS = [["meus", "Meus jogos", "joystick"], ["jogos", "Jogos", "gamepad-2"], ["bots", "Bots", "bot"], ["sites", "Sites e apps", "globe"], ["bancos", "Bancos de dados", "database"], ["outros", "Outros", "box"], ["eggs", "Eggs", "egg"]];
 const EGG_GROUPS = [["", "Todos"], ["games", "Jogos"], ["applications", "Aplicativos"], ["generic", "Linguagens"]];
 const EGG_MIN_AGENT = "1.1.0";
 const olderThan = (v, min) => { const a = String(v || "0").split(".").map(Number), b = min.split(".").map(Number); for (let i = 0; i < 3; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) < b[i]; return false; };
@@ -92,6 +92,7 @@ function changedSoon(node, data) {
   }), 250);
 }
 piphin.on("node-status", ({ id, online }) => { const n = nodeOf(id); if (!n) return; n.online = online; if (online) loadServers(id).then(renderSide); renderSide(); if (S.view.node === id && S.view.kind === "node") { if (onOverview(id) || !online) renderMain(); else if (online) machineBack(); } });
+piphin.on("node-moved", ({ id, host, port }) => { const n = nodeOf(id); if (!n) return; n.host = host; n.port = port; renderSide(); if (S.view.node === id) renderMain(); });
 piphin.on("transfer", (t) => {
   const el = $("#transfer");
   el.hidden = !!t.finished;
@@ -162,6 +163,7 @@ function renderMain() {
   const html = v.kind === "node" ? nodeView() : v.kind === "server" ? serverView() : home();
   $("#main").innerHTML = `<div class="wrap">${html}</div>`;
   if (v.kind === "server") { paintConsole(); paintServerStats(); if (S.tab === "files" && !S.files) loadFiles(S.filesPath); if (S.tab === "backups" && !S.backups) loadBackups(); if (S.tab === "schedules") fillNextRuns(); }
+  if (v.kind === "server" && S.tab === "settings") paintGameSect();
   if (v.kind === "node") { paintNodeStats(); machineMounted(); }
 }
 function home() {
@@ -401,7 +403,7 @@ function varInput(v, val, prefix = "v") {
 const readVars = (root) => Object.fromEntries($$("[data-var]", root).map((el) => [el.dataset.var, el.type === "checkbox" ? (el.checked ? "true" : "false") : el.value]));
 function settingsTab() {
   const s = S.srv, t = (S.templates[S.view.node] || []).find((x) => x.id === s.template);
-  return `<div class="card" id="setForm"><div class="form">
+  return `${s.game ? `<div class="card" id="gameSect"><span class="spin"></span></div>` : ""}<div class="card" id="setForm"><div class="form">
       <div class="two"><label>Nome<input type="text" id="sName" value="${esc(s.name)}" maxlength="60" data-noi18n></label><label>Descrição<input type="text" id="sDesc" value="${esc(s.description)}" maxlength="200" data-noi18n></label></div>
       ${t && t.vars.length ? `<div class="sect"><b>Opções do ${esc(t.name)}</b><div class="form">${t.vars.map((v) => varInput(v, s.vars[v.key] ?? v.default)).join("")}</div></div>` : ""}
       ${t && t.images ? `<div class="sect"><label>Versão do ambiente<select id="sImage">${t.images.map((i) => `<option value="${esc(i.image)}" ${i.image === s.image ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select></label></div>` : ""}
@@ -443,7 +445,8 @@ async function newServerWizard(nodeId) {
   openModal(`<div class="row"><h3 class="grow" style="margin:0">Novo servidor</h3><span class="faint" data-noi18n>${esc(n.name)}</span></div><div id="wiz"><div class="empty"><span class="spin"></span></div></div>`, "wide");
   let tpls;
   try { tpls = await templatesOf(nodeId); } catch (e) { $("#wiz").innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
-  let cat = "jogos";
+  // quem já tem jogos próprios começa por eles
+  let cat = (await call("games", nodeId).catch(() => [])).length ? "meus" : "jogos";
   let eggQuery = "", eggGroup = "";
   const reloadTpls = async () => { delete S.templates[nodeId]; tpls = await templatesOf(nodeId); };
   const catTabs = () => `<div class="tpl-cats">${CATS.map(([k, t, ic]) => `<button class="${k === cat ? "on" : ""}" data-cat="${k}"><i class="i i-${ic}"></i> ${t}</button>`).join("")}</div>`;
@@ -508,6 +511,7 @@ async function newServerWizard(nodeId) {
   });
   const pick = () => {
     if (cat === "eggs") return eggsPane();
+    if (cat === "meus") return guard(gamesPane)({ nodeId, catTabs, configure, tpls: () => tpls, reloadTpls, bindCats: () => $$("[data-cat]").forEach((b) => (b.onclick = () => { cat = b.dataset.cat; pick(); })) });
     $("#wiz").innerHTML = `<div class="tpl-cats">${CATS.map(([k, t, ic]) => `<button class="${k === cat ? "on" : ""}" data-cat="${k}"><i class="i i-${ic}"></i> ${t}</button>`).join("")}</div>
       <div class="tpl-grid">${tpls.filter((t) => t.category === cat).map((t) => `<button class="tpl" data-tpl="${t.id}"><div class="ic"><i class="i i-${esc(t.icon)}"></i></div><div><b>${esc(t.name)}</b><br><span>${esc(t.description)}</span></div></button>`).join("")}</div>
       <div class="modal-actions"><button class="btn" data-x>Cancelar</button></div>`;
@@ -515,11 +519,12 @@ async function newServerWizard(nodeId) {
     $$("[data-cat]").forEach((b) => (b.onclick = () => { cat = b.dataset.cat; pick(); }));
     $$("[data-tpl]").forEach((b) => (b.onclick = () => configure(tpls.find((t) => t.id === b.dataset.tpl))));
   };
-  const configure = (t) => {
+  const configure = (t, game = null) => {
     const total = S.nodeInfo && S.view.node === nodeId ? S.nodeInfo.info.memory : null;
     $("#wiz").innerHTML = `<div class="form" data-sticky>
-        <div class="row"><button class="btn sm ghost" data-back><i class="i i-chevron-left"></i>Voltar</button><b>${esc(t.name)}</b></div>
-        <div class="two"><label>Nome do servidor<input type="text" id="wName" value="${esc(t.name)}" maxlength="60" data-noi18n></label>
+        <div class="row"><button class="btn sm ghost" data-back><i class="i i-chevron-left"></i>Voltar</button><b data-noi18n>${esc(game ? game.name : t.name)}</b></div>
+        ${game ? `<p class="faint" style="margin:0">Pacote: versão de <span data-noi18n>${esc(new Date(game.versions[0].at).toLocaleString())}</span> · ${bytes(game.versions[0].size)}</p>` : ""}
+        <div class="two"><label>Nome do servidor<input type="text" id="wName" value="${esc(game ? game.name : t.name)}" maxlength="60" data-noi18n></label>
           ${t.images ? `<label>Versão do ambiente<select id="wImage">${t.images.map((i) => `<option value="${esc(i.image)}">${esc(i.name)}</option>`).join("")}</select></label>` : "<span></span>"}</div>
         ${t.vars.length ? `<div class="sect"><b>Opções</b><div class="form" id="wVars">${t.vars.map((v) => varInput(v, v.default, "w")).join("")}</div></div>` : ""}
         ${t.editableStartup ? `<label>Comando de início (vazio = o da imagem)<input type="text" id="wStartup" class="mono" value="${t.egg ? esc(t.startup || "") : ""}" data-noi18n></label>` : ""}
@@ -536,7 +541,7 @@ async function newServerWizard(nodeId) {
     box.querySelector("[data-create]").onclick = guard(async () => {
       const btn = box.querySelector("[data-create]"); btn.disabled = true;
       try {
-        const spec = { template: t.id, name: $("#wName").value, vars: readVars($("#wiz")), image: $("#wImage") ? $("#wImage").value : undefined, startup: $("#wStartup") ? $("#wStartup").value : undefined, extraPorts: $("#wExtra") ? $("#wExtra").value : undefined,
+        const spec = { template: t.id, game: game ? game.id : undefined, name: $("#wName").value, vars: readVars($("#wiz")), image: $("#wImage") ? $("#wImage").value : undefined, startup: $("#wStartup") ? $("#wStartup").value : undefined, extraPorts: $("#wExtra") ? $("#wExtra").value : undefined,
           ports: $$("[data-wport]").map((el) => Number(el.value) || 0), limits: { memory: Number($("#wMem").value) || 0, cpu: Number($("#wCpu").value) || 0, disk: Number($("#wDisk").value) || 0 }, autostart: $("#wAuto").checked };
         const s = await call("server-create", { node: nodeId, spec });
         closeModal();

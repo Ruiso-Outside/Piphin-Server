@@ -57,9 +57,9 @@ exports.activate = (ctx) => {
     }
     return [...out];
   }
-  ctx.handle("discover", () => new Promise((resolve) => {
+  const discoverAll = () => new Promise((resolve) => {
     const found = new Map(), sock = dgram.createSocket("udp4");
-    sock.on("message", (m, r) => { try { const j = JSON.parse(String(m)); if (j.agent === "piphin") found.set(`${r.address}:${j.port}`, { host: r.address, port: j.port, name: j.name, version: j.version, pairing: j.pairing, known: nodes.some((n) => n.host === r.address && n.port === j.port) }); } catch {} });
+    sock.on("message", (m, r) => { try { const j = JSON.parse(String(m)); if (j.agent === "piphin") found.set(`${r.address}:${j.port}`, { host: r.address, port: j.port, name: j.name, version: j.version, pairing: j.pairing, fingerprint: j.fingerprint, known: nodes.some((n) => n.fingerprint === j.fingerprint || (n.host === r.address && n.port === j.port)) }); } catch {} });
     sock.on("error", () => {});
     sock.bind(0, () => {
       sock.setBroadcast(true);
@@ -68,7 +68,8 @@ exports.activate = (ctx) => {
       setTimeout(() => { for (const b of broadcasts()) sock.send(msg, 8444, b, () => {}); }, 500);
     });
     setTimeout(() => { try { sock.close(); } catch {} resolve([...found.values()]); }, 1800);
-  }));
+  });
+  ctx.handle("discover", async () => (await discoverAll()).map(({ fingerprint, ...m }) => m));
   ctx.handle("install-command", () => INSTALL_CMD);
 
   // ---------------------------------------------------------------- parear
@@ -128,8 +129,24 @@ exports.activate = (ctx) => {
       st.req.end();
     };
     const setOnline = (v) => { if (st.online !== v) { st.online = v; ctx.emit("node-status", { id: n.id, online: v }); } };
-    const fail = () => { setOnline(false); if (!st.stopped && !st.retry) st.retry = setTimeout(() => { st.retry = null; open(); }, 5000); };
+    const fail = () => {
+      setOnline(false);
+      if (st.stopped || st.retry) return;
+      st.fails = (st.fails || 0) + 1;
+      if (st.fails === 1 || st.fails % 3 === 0) relocate(n).catch(() => {});
+      st.retry = setTimeout(() => { st.retry = null; open(); }, 5000);
+    };
     open();
+  }
+  // pergunta na rede quem tem o mesmo certificado: se a máquina estiver em outro IP, passa a usar esse (a conexão continua presa ao certificado)
+  async function relocate(n) {
+    const found = await discoverAll();
+    const hit = found.find((m) => m.fingerprint === n.fingerprint && (m.host !== n.host || m.port !== n.port));
+    if (!hit) return;
+    ctx.log && ctx.log(`máquina ${n.name} mudou de ${n.host}:${n.port} para ${hit.host}:${hit.port}`);
+    n.host = hit.host; n.port = hit.port; save();
+    connect(n);
+    ctx.emit("node-moved", { id: n.id, host: n.host, port: n.port });
   }
   function disconnect(id) { const st = live.get(id); if (!st) return; st.stopped = true; clearTimeout(st.retry); try { st.req && st.req.destroy(); } catch {} live.delete(id); }
   for (const n of nodes) connect(n);
@@ -208,6 +225,27 @@ exports.activate = (ctx) => {
   }
   ctx.handle("file-download", ({ node: id, server, path: p }) => download(id, `/api/servers/${sid(server)}/files/download${q(p)}`, path.posix.basename(p)));
   ctx.handle("show-item", (f) => ctx.host.showItem(f));
+
+  // ---------------------------------------------------------------- Meus jogos
+  ctx.handle("games", (id) => api(id, "GET", "/api/games"));
+  ctx.handle("game-create", ({ node: id, name, template }) => api(id, "POST", "/api/games", { name, template }));
+  ctx.handle("game-delete", ({ node: id, game }) => api(id, "DELETE", `/api/games/${sid(game)}`));
+  // o pacote (centenas de MB) vai em fluxo, com o progresso na barra de envio
+  ctx.handle("game-upload", async ({ node: id, game, files }) => {
+    let list = files;
+    if (!list || !list.length) list = await ctx.host.openDialog({ title: "Pacote do jogo", properties: ["openFile"], filters: [{ name: "Pacote do jogo", extensions: ["gz", "tgz", "tar", "zip"] }] });
+    if (!list || !list.length) return null;
+    const file = list[0], size = fs.statSync(file).size, name = path.basename(file);
+    let sent = 0, last = 0;
+    const stream = fs.createReadStream(file);
+    stream.on("data", (c) => { sent += c.length; if (Date.now() - last > 300) { last = Date.now(); ctx.emit("transfer", { name, done: sent, total: size }); } });
+    try {
+      const v = (await call(node(id), "PUT", `/api/games/${sid(game)}/package?name=${encodeURIComponent(name)}`, null, { timeout: 0, raw: { stream, headers: { "Content-Type": "application/octet-stream", "Content-Length": size } } })).body;
+      return v;
+    } finally { ctx.emit("transfer", { name, done: size, total: size, finished: true }); }
+  });
+  // extrair um pacote grande leva alguns minutos
+  ctx.handle("server-game-update", ({ node: id, server, version }) => api(id, "POST", `/api/servers/${sid(server)}/game-update`, { version }, { timeout: 30 * 60000 }));
 
   ctx.handle("backups", ({ node: id, server }) => api(id, "GET", `/api/servers/${sid(server)}/backups`));
   ctx.handle("backup-create", ({ node: id, server, note }) => api(id, "POST", `/api/servers/${sid(server)}/backups`, { note }, { timeout: 6 * 3600 * 1000 }));

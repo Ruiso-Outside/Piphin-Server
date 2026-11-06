@@ -22,6 +22,7 @@ const host = require("./host");
 const Auth = require("./auth");
 const system = require("./system");
 const Terminals = require("./terminal");
+const Games = require("./games");
 
 const VERSION = require("../package.json").version;
 const CONFIG = process.env.PIPHIN_CONFIG || "/etc/piphin-agent/config.json";
@@ -66,6 +67,8 @@ if (cmd && cmd !== "run") {
 templates.setEggs(eggs.load(cfg));
 const servers = new Servers(cfg, log);
 const backups = new Backups(servers);
+const games = new Games(cfg.dataDir);
+servers.games = games;
 const certPem = fs.readFileSync(cfg.cert, "utf8");
 const fingerprint = fingerprintOf(certPem);
 
@@ -213,6 +216,24 @@ route("GET", "/api/terminals", true, () => { terminalOff(); return terminals.lis
 route("POST", "/api/terminals", true, async (req) => { terminalOff(); const b = await readJson(req); return terminals.open({ cols: b.cols, rows: b.rows, who: req.socket.remoteAddress }); });
 route("POST", "/api/terminals/:tid/resize", true, async (req, res, p) => { const b = await readJson(req); return { ok: terminals.resize(p.tid, b.cols, b.rows) }; });
 route("DELETE", "/api/terminals/:tid", true, (req, res, p) => ({ ok: terminals.close(p.tid) }));
+
+// ---------------------------------------------------------------- Meus jogos
+const gameView = (g) => ({ ...g, servers: [...servers.map.values()].filter((s) => s.game === g.id).map((s) => ({ id: s.id, name: s.name, version: s.gameVersion || null })) });
+route("GET", "/api/games", true, () => games.list().map(gameView));
+route("POST", "/api/games", true, async (req) => {
+  const b = await readJson(req);
+  if (!templates.get(b.template)) throw Object.assign(new Error("Modelo desconhecido"), { status: 400 });
+  log("jogo criado:", b.name);
+  return gameView(games.create(b));
+});
+route("PATCH", "/api/games/:gid", true, async (req, res, p) => {
+  const b = await readJson(req);
+  if (b.template && !templates.get(b.template)) throw Object.assign(new Error("Modelo desconhecido"), { status: 400 });
+  return gameView(games.update(p.gid, b));
+});
+route("DELETE", "/api/games/:gid", true, (req, res, p) => { games.remove(p.gid, [...servers.map.values()].filter((s) => s.game === p.gid).map((s) => s.name)); return { ok: true }; });
+route("PUT", "/api/games/:gid/package", true, async (req, res, p, q) => { const v = await games.upload(p.gid, req, q.get("name")); log("jogo: versão enviada", p.gid, v.name, v.size); return v; });
+route("POST", "/api/servers/:id/game-update", true, async (req, res, p) => servers.updateGame(p.id, (await readJson(req)).version || null));
 
 route("GET", "/api/servers", true, () => servers.list());
 route("POST", "/api/servers", true, async (req) => servers.create(await readJson(req)));
