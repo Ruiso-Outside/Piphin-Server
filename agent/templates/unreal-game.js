@@ -10,6 +10,8 @@ L=$(ls ./*Server.sh 2>/dev/null | head -n1); MODE=dedicado
 if [ -z "$L" ]; then L=$(ls ./*.sh 2>/dev/null | grep -v '/Engine' | head -n1); MODE=listen; fi
 [ -n "$L" ] || { echo "Não achei o executável do jogo (o arquivo .sh na raiz do pacote)."; exit 1; }
 chmod +x "$L" ./Engine/Binaries/Linux/* ./*/Binaries/Linux/* 2>/dev/null
+# caminho de mapa digitado sem a barra do começo (Game/...): sem ela a Unreal acha que é o endereço de outro servidor
+case "$MAP" in ""|/*|*://*) ;; */*) MAP="/$MAP" ;; esac
 if [ "$MODE" = listen ]; then
   [ -n "$MAP" ] || { echo "Preencha o mapa nas opções do servidor: o jogo normal precisa saber qual mapa hospedar."; exit 1; }
   echo "Rodando $L sem tela, hospedando $MAP"

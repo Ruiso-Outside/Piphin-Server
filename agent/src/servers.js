@@ -303,7 +303,8 @@ echo "Pacote extraído."`;
       SERVER_IP: "0.0.0.0", HOME: s.mount, TZ: process.env.TZ || "America/Sao_Paulo", PIPHIN_SERVER: s.id };
   }
   envList(s) { return Object.entries(this.envMap(s)).map(([k, v]) => `${k}=${v}`); }
-  startupLine(s) { const e = this.envMap(s); return String(s.startup || "").replace(/\{\{([A-Z0-9_]+)\}\}/g, (all, k) => (e[k] !== undefined ? e[k] : all)); }
+  // comando que a pessoa não edita vem sempre do modelo atual: correções do modelo chegam aos servidores que já existem
+  startupLine(s) { const e = this.envMap(s), t = templates.get(s.template); return String((t && !t.editableStartup && t.startup) || s.startup || "").replace(/\{\{([A-Z0-9_]+)\}\}/g, (all, k) => (e[k] !== undefined ? e[k] : all)); }
 
   // ---------------------------------------------------------------- ligar e desligar
   async power(id, action) {
